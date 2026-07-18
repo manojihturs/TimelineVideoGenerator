@@ -744,12 +744,20 @@ def run_auto_fetch_movie_job(job_id, title, topic, max_movies=DEFAULT_MAX_AUTO_F
     title, release year, poster, and a computed budget-vs-revenue verdict
     — sort by year ascending, and populate Assets/<n>.jpg + Data/data.csv.
     No manual data entry: TMDb is a structured database, not a search
-    engine, so every field comes back as real data, not scraped text."""
+    engine, so every field comes back as real data, not scraped text.
+
+    Resumable: a fetch is ~2x(N) HTTPS round trips (movie detail + poster
+    per item), and a single transient connection reset anywhere in that
+    sequence used to mean starting over from item 1. State (which movie ids
+    were already written, in what order) is persisted to a small JSON file
+    in the project; a retry for the same topic/list picks up where the
+    last attempt left off instead of redoing completed work."""
     job = JOBS[job_id]
     try:
         p = project_path(title)
         assets_dir = os.path.join(p, "Assets")
         data_csv = os.path.join(p, "Data", "data.csv")
+        state_path = os.path.join(p, "Data", ".autofetch_state.json")
 
         job["progress"] = 3
         job["message"] = f'Looking up "{topic}" on TMDb'
@@ -781,12 +789,32 @@ def run_auto_fetch_movie_job(job_id, title, topic, max_movies=DEFAULT_MAX_AUTO_F
         if not movies:
             raise RuntimeError(f"No dated, posterized movie credits found for {person['name']}.")
 
-        for _, old_path in numbered_images(assets_dir):
-            os.remove(old_path)
+        movie_ids = [m["id"] for m in movies]
+        resume_from = 0  # 0-indexed count of items already completed
+        rows = []
+        state = None
+        if os.path.isfile(state_path):
+            try:
+                with open(state_path, "r", encoding="utf-8") as f:
+                    state = json.load(f)
+            except (OSError, ValueError):
+                state = None
+        if state and state.get("topic") == topic and state.get("movie_ids") == movie_ids:
+            resume_from = state.get("completed", 0)
+            rows = state.get("rows", [])
+            job["message"] = f"Resuming from item {resume_from + 1}/{len(movies)}"
+        else:
+            for _, old_path in numbered_images(assets_dir):
+                os.remove(old_path)
+
+        def save_state(completed):
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump({"topic": topic, "movie_ids": movie_ids, "completed": completed, "rows": rows}, f)
 
         total = len(movies)
-        rows = []
         for i, m in enumerate(movies, start=1):
+            if i <= resume_from:
+                continue
             job["progress"] = 8 + int((i - 1) / total * 85)
             job["message"] = f"Fetching {i}/{total}: {m['title']}"
 
@@ -797,9 +825,12 @@ def run_auto_fetch_movie_job(job_id, title, topic, max_movies=DEFAULT_MAX_AUTO_F
             download_image(f"{TMDB_IMAGE_BASE}{m['poster_path']}", os.path.join(assets_dir, str(i)))
 
             rows.append([m["title"], year, verdict])
+            save_state(i)
 
         with open(data_csv, "w", newline="", encoding="utf-8-sig") as f:
             csv.writer(f).writerows(rows)
+        if os.path.isfile(state_path):
+            os.remove(state_path)
 
         job["status"] = "done"
         job["progress"] = 100
