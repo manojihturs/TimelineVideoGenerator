@@ -3,6 +3,7 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![Flask](https://img.shields.io/badge/flask-3.0-black.svg)](https://flask.palletsprojects.com/)
 [![GitHub repo](https://img.shields.io/badge/github-manojihturs%2FTimelineVideoGenerator-181717?logo=github)](https://github.com/manojihturs/TimelineVideoGenerator)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 A local web app: create a project, drop numbered images + a CSV of captions
 into its folders, and generate a captioned video (desktop 16:9 up to 4K, or
