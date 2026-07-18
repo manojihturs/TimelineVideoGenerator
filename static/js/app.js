@@ -10,6 +10,9 @@ const state = {
   currentTitle: null,
   device: "desktop",
   pollTimer: null,
+  categories: [],
+  selectedCategory: null,
+  fetchPollTimer: null,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -137,6 +140,200 @@ async function loadProjectDetail(title) {
   renderThumbnailControls(p);
   renderThumbnailsList(p);
   updateGenerateAvailability(p);
+  await ensureCategoriesLoaded();
+  applyProjectCategory(p.category);
+}
+
+// -------------------------------------------------------------------------
+// content / categories
+// -------------------------------------------------------------------------
+
+async function ensureCategoriesLoaded() {
+  if (state.categories.length > 0) return;
+  const res = await fetch("/api/categories");
+  state.categories = await res.json();
+  const select = $("#select-category");
+  select.innerHTML =
+    `<option value="">— none —</option>` +
+    state.categories.map((c) => `<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}</option>`).join("");
+}
+
+function categoryByName(name) {
+  return state.categories.find((c) => c.name === name) || null;
+}
+
+function applyProjectCategory(categoryName) {
+  $("#select-category").value = categoryName || "";
+  state.selectedCategory = categoryByName(categoryName);
+  renderItemsTableHead();
+  resetItemsTableBody();
+}
+
+$("#select-category").addEventListener("change", async () => {
+  const title = state.currentTitle;
+  const categoryName = $("#select-category").value;
+
+  await fetch(`/api/projects/${encodeURIComponent(title)}/category`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category: categoryName }),
+  });
+
+  state.selectedCategory = categoryByName(categoryName);
+  renderItemsTableHead();
+  resetItemsTableBody();
+});
+
+function renderItemsTableHead() {
+  const head = $("#items-table-head");
+  const columns = state.selectedCategory ? state.selectedCategory.columns : [];
+  head.innerHTML =
+    `<th>#</th><th>Search query</th>` +
+    columns.map((c) => `<th>${escapeHtml(c)}</th>`).join("") +
+    `<th></th>`;
+
+  const wrap = $("#items-table-wrap");
+  const fetchBtn = $("#btn-fetch-items");
+  const hasCategory = !!state.selectedCategory;
+  wrap.classList.toggle("hidden", !hasCategory);
+  fetchBtn.classList.toggle("hidden", !hasCategory);
+
+  const hasAutoSource = !!(state.selectedCategory && state.selectedCategory.auto_source);
+  $("#auto-fetch-section").classList.toggle("hidden", !hasAutoSource);
+}
+
+$("#btn-auto-fetch").addEventListener("click", async () => {
+  const title = state.currentTitle;
+  const errEl = $("#auto-fetch-error");
+  errEl.classList.add("hidden");
+
+  const topic = $("#input-topic").value.trim();
+  if (!topic) {
+    errEl.textContent = "Enter a topic (e.g. an actor's name).";
+    errEl.classList.remove("hidden");
+    return;
+  }
+
+  const btn = $("#btn-auto-fetch");
+  btn.disabled = true;
+  btn.textContent = "Fetching…";
+
+  const res = await fetch(`/api/projects/${encodeURIComponent(title)}/auto-fetch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category: state.selectedCategory ? state.selectedCategory.name : null, topic }),
+  });
+  const body = await res.json();
+
+  if (!res.ok) {
+    errEl.textContent = body.error || "Could not start auto-fetch.";
+    errEl.classList.remove("hidden");
+    btn.disabled = false;
+    btn.textContent = "Auto-fetch filmography";
+    return;
+  }
+
+  $("#fetch-panel").classList.remove("hidden");
+  $("#fetch-progress-fill").style.width = "0%";
+  $("#fetch-message").textContent = "Starting…";
+  pollFetchJob(body.job_id, title, btn, "Auto-fetch filmography");
+});
+
+function resetItemsTableBody() {
+  $("#items-table-body").innerHTML = "";
+  if (state.selectedCategory) addItemRow();
+}
+
+function addItemRow() {
+  const columns = state.selectedCategory ? state.selectedCategory.columns : [];
+  const body = $("#items-table-body");
+  const tr = document.createElement("tr");
+  tr.innerHTML =
+    `<td class="row-num"></td>` +
+    `<td><input class="field-input item-query" type="text" placeholder="e.g. Top Gun 1986" /></td>` +
+    columns.map((c) => `<td><input class="field-input item-col" type="text" placeholder="${escapeHtml(c)}" /></td>`).join("") +
+    `<td><button type="button" class="btn-remove-row" title="Remove">×</button></td>`;
+  tr.querySelector(".btn-remove-row").addEventListener("click", () => {
+    tr.remove();
+    renumberItemRows();
+  });
+  body.appendChild(tr);
+  renumberItemRows();
+}
+
+function renumberItemRows() {
+  $$("#items-table-body tr").forEach((tr, i) => {
+    tr.querySelector(".row-num").textContent = `${i + 1}.`;
+  });
+}
+
+$("#btn-add-item-row").addEventListener("click", addItemRow);
+
+$("#btn-fetch-items").addEventListener("click", async () => {
+  const title = state.currentTitle;
+  const errEl = $("#items-error");
+  errEl.classList.add("hidden");
+
+  const rows = Array.from($$("#items-table-body tr"));
+  const items = rows.map((tr) => {
+    const query = tr.querySelector(".item-query").value.trim();
+    const row = Array.from(tr.querySelectorAll(".item-col")).map((i) => i.value.trim());
+    return { query, row };
+  });
+
+  if (items.length === 0 || items.some((it) => !it.query || it.row.some((v) => !v))) {
+    errEl.textContent = "Every row needs a search query and a value in every column.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+
+  const btn = $("#btn-fetch-items");
+  btn.disabled = true;
+  btn.textContent = "Fetching…";
+
+  const res = await fetch(`/api/projects/${encodeURIComponent(title)}/items`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category: state.selectedCategory ? state.selectedCategory.name : null, items }),
+  });
+  const body = await res.json();
+
+  if (!res.ok) {
+    errEl.textContent = body.error || "Could not start fetch.";
+    errEl.classList.remove("hidden");
+    btn.disabled = false;
+    btn.textContent = "Fetch content";
+    return;
+  }
+
+  $("#fetch-panel").classList.remove("hidden");
+  $("#fetch-progress-fill").style.width = "0%";
+  $("#fetch-message").textContent = "Starting…";
+  pollFetchJob(body.job_id, title, btn);
+});
+
+function pollFetchJob(jobId, title, btn, resetLabel) {
+  resetLabel = resetLabel || "Fetch content";
+  clearInterval(state.fetchPollTimer);
+  state.fetchPollTimer = setInterval(async () => {
+    const res = await fetch(`/api/jobs/${jobId}`);
+    const job = await res.json();
+
+    $("#fetch-progress-fill").style.width = `${job.progress}%`;
+    $("#fetch-message").textContent = job.message;
+
+    if (job.status === "done") {
+      clearInterval(state.fetchPollTimer);
+      btn.disabled = false;
+      btn.textContent = resetLabel;
+      loadProjectDetail(title);
+    } else if (job.status === "error") {
+      clearInterval(state.fetchPollTimer);
+      btn.disabled = false;
+      btn.textContent = resetLabel;
+      $("#fetch-message").textContent = "Error: " + job.message;
+    }
+  }, 1200);
 }
 
 function renderFilmstrip(p) {

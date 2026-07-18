@@ -55,6 +55,84 @@ Then open **http://127.0.0.1:5050** in your browser.
 6. **Generate** — watch the progress bar, then download the mp4 from the
    Export list once it's done.
 
+## Auto-fill from a category (optional)
+
+Instead of manually collecting images and typing `data.csv` by hand, you can
+define **categories** — reusable templates that say what CSV columns a
+project needs (e.g. `Movie` → Name / Year of release / Box office status,
+`Car` → Name / Year of release / Total sale count) — then either:
+
+- **Fully automatic (Movie category only)**: type a topic (an actor's name)
+  and the app pulls their entire filmography — title, year, poster image,
+  and a computed box-office verdict — with zero manual data entry. See
+  "Full auto-fetch" below.
+- **Semi-automatic (any category)**: you supply the item list/data, the app
+  fetches one matching image per item. See "Image-only fetch" below.
+
+### Full auto-fetch (Movie category)
+
+Uses **TMDb** (themoviedb.org), a free, official, structured movie
+database API — not a search engine, so title/year/budget/revenue/poster
+come back as real fields, not guessed from text. This is what makes
+"topic in → finished project out" possible with no manual data entry.
+
+1. Get a free API key at
+   [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api).
+2. Set it as an environment variable before running the app:
+   ```bash
+   export TMDB_API_KEY=your_key_here
+   ```
+3. In a project's **Content** panel, pick category **Movie**, type an
+   actor's name into **Topic**, and click **Auto-fetch filmography**. Their
+   dated movie credits are sorted by year, downloaded as posters into
+   `Assets/1.jpg, 2.jpg, ...` (capped at 30 movies), and box-office verdict
+   (Flop/Average/Hit/Blockbuster) is computed from each movie's
+   budget-vs-revenue ratio — written straight into `Data/data.csv`.
+   Review/edit the CSV afterward if you want to adjust anything.
+
+API route: `POST /api/projects/<title>/auto-fetch` with
+`{"category": "Movie", "topic": "Aamir Khan"}`.
+
+### Image-only fetch (any category)
+
+Images are sourced via the official **Google Custom Search JSON API**
+(image search) — not scraping, so it respects Google's terms and won't get
+blocked. You need your own key:
+
+1. Get an API key at [console.cloud.google.com](https://console.cloud.google.com/)
+   (enable the "Custom Search API").
+2. Create a Programmable Search Engine at
+   [programmablesearchengine.google.com](https://programmablesearchengine.google.com/)
+   with **Image search** turned on, and note its Search Engine ID (`cx`).
+3. Set both as environment variables before running the app:
+   ```bash
+   export GOOGLE_CSE_API_KEY=your_key_here
+   export GOOGLE_CSE_CX=your_cx_here
+   ```
+   (Google's free tier is 100 queries/day; each item fetched uses one query.)
+
+**Categories** — `GET/POST /api/categories`, `DELETE /api/categories/<name>`.
+Ships with `Movie` and `Car` presets; add your own with any column list.
+
+**Fetching content for a project** — `POST /api/projects/<title>/items`
+with an ordered list, one entry per item, in the exact order you want
+`1.jpg`, `2.jpg`, ... to end up in:
+```json
+{
+  "category": "Movie",
+  "items": [
+    {"query": "Top Gun 1986", "row": ["Top Gun", "1986", "Blockbuster"]},
+    {"query": "Days of Thunder 1990", "row": ["Days of Thunder", "1990", "Average"]}
+  ]
+}
+```
+You supply the row data (year, box-office status, sales count, etc.)
+yourself — that figure doesn't come from a reliable structured API, so the
+app doesn't try to guess it. It only automates the tedious part: finding
+and downloading one matching image per item, in order, and writing the CSV
+rows to line up with them. Re-fetching for a project replaces its existing
+`Assets/` images and `Data/data.csv`.
+
 ## Thumbnail generation
 
 In the project workspace, the **Thumbnail** panel lets you:

@@ -55,6 +55,51 @@
 
     <div class="filmstrip" id="filmstrip"></div>
 
+    <div class="panel content-panel">
+      <h2 class="panel-title">Content</h2>
+      <p class="lede-sm">Auto-fill Assets + Data/data.csv from a category:
+        pick a template, list your items in the order you want them
+        (1.jpg, 2.jpg, ...), and the app fetches one image per item and
+        writes the CSV rows to match.</p>
+
+      <div class="field-row">
+        <div class="field" style="flex:1">
+          <label class="field-label">Category</label>
+          <select id="select-category" class="field-input"></select>
+        </div>
+      </div>
+
+      <div id="auto-fetch-section" class="auto-fetch-section hidden">
+        <p class="lede-sm">Fully automatic: give a topic, get title/year/poster/verdict
+          for every item — no manual data entry, just review the result below.</p>
+        <div class="field-row">
+          <div class="field" style="flex:1">
+            <label class="field-label">Topic <span class="hint">(e.g. an actor's name)</span></label>
+            <input id="input-topic" class="field-input" type="text" placeholder="e.g. Aamir Khan" />
+          </div>
+        </div>
+        <button id="btn-auto-fetch" class="btn btn-primary btn-fetch-items">Auto-fetch filmography</button>
+        <p id="auto-fetch-error" class="error-text hidden"></p>
+        <div class="content-divider"><span>or add items manually</span></div>
+      </div>
+
+      <div id="items-table-wrap" class="items-table-wrap">
+        <table class="items-table" id="items-table">
+          <thead><tr id="items-table-head"></tr></thead>
+          <tbody id="items-table-body"></tbody>
+        </table>
+        <button id="btn-add-item-row" class="btn btn-ghost btn-add-row">+ Add item</button>
+      </div>
+
+      <button id="btn-fetch-items" class="btn btn-primary btn-fetch-items">Fetch content</button>
+      <p id="items-error" class="error-text hidden"></p>
+
+      <div id="fetch-panel" class="panel fetch-panel hidden">
+        <div class="progress-track"><div id="fetch-progress-fill" class="progress-fill"></div></div>
+        <p id="fetch-message" class="render-message">Starting…</p>
+      </div>
+    </div>
+
     <div class="workspace-grid">
 
       <div class="panel">

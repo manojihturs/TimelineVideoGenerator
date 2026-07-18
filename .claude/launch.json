@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "reelframe",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["app.py"],
+      "port": 5050
+    }
+  ]
+}

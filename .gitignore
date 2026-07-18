@@ -9,6 +9,12 @@ env/
 projects/*
 !projects/.gitkeep
 
+# Runtime-generated local config (auto-seeded with defaults on first run)
+categories.json
+
+# Local secrets (API keys) — never commit
+.env.local
+
 # OS
 .DS_Store
 Thumbs.db
