@@ -444,6 +444,8 @@ $("#btn-generate").addEventListener("click", async () => {
     payload.resolution = $("#select-resolution").value;
   } else {
     payload.seconds = parseInt($("#input-mobile-seconds").value || "0", 10);
+    const maxItems = $("#input-mobile-max-items").value.trim();
+    if (maxItems) payload.max_items = parseInt(maxItems, 10);
   }
 
   const res = await fetch(`/api/projects/${encodeURIComponent(title)}/generate`, {

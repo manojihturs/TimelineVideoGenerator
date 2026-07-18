@@ -143,7 +143,14 @@
               <label class="field-label">Seconds <span class="hint">(max 60)</span></label>
               <input id="input-mobile-seconds" class="field-input field-input-sm" type="number" min="1" max="60" value="30" />
             </div>
+            <div class="field">
+              <label class="field-label">Max items <span class="hint">(optional)</span></label>
+              <input id="input-mobile-max-items" class="field-input field-input-sm" type="number" min="1" placeholder="all" />
+            </div>
           </div>
+          <p class="lede-sm">With a lot of items, 60s can go by too fast to read. Set a max to
+            show only the most recent N (in order) at a comfortable pace instead of cramming
+            everything in.</p>
         </div>
 
         <button id="btn-generate" class="btn btn-primary btn-generate" disabled>Generate</button>

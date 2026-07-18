@@ -883,7 +883,7 @@ def run_fetch_items_job(job_id, title, items, category_name):
         job["message"] = str(e)
 
 
-def run_render_job(job_id, title, device, width, height, total_seconds):
+def run_render_job(job_id, title, device, width, height, total_seconds, max_items=None):
     job = JOBS[job_id]
     try:
         p = project_path(title)
@@ -897,6 +897,14 @@ def run_render_job(job_id, title, device, width, height, total_seconds):
         # the CSV is the source of truth for what gets built
         row_nums = sorted(rows.keys())
         objects = [(n, images_by_num[n], rows[n]) for n in row_nums if n in images_by_num]
+
+        if max_items and len(objects) > max_items:
+            # keep the LAST max_items rows, not the first — rows are in
+            # their original order (e.g. chronological ascending for an
+            # auto-fetched filmography), so this is "the most recent N",
+            # still shown oldest-to-newest, useful for a short mobile cut
+            # that can't fit every item at a readable pace
+            objects = objects[-max_items:]
 
         if not objects:
             raise RuntimeError(
@@ -1162,11 +1170,20 @@ def api_generate(title):
     else:
         return jsonify({"error": "device must be 'desktop' or 'mobile'."}), 400
 
+    max_items = data.get("max_items")
+    if max_items is not None:
+        try:
+            max_items = int(max_items)
+        except (TypeError, ValueError):
+            return jsonify({"error": "max_items must be a number."}), 400
+        if max_items < 1:
+            return jsonify({"error": "max_items must be at least 1."}), 400
+
     job_id = uuid.uuid4().hex[:12]
     JOBS[job_id] = {"status": "running", "progress": 0, "message": "Starting", "output_path": None}
     t = threading.Thread(
         target=run_render_job,
-        args=(job_id, title, device, width, height, total_seconds),
+        args=(job_id, title, device, width, height, total_seconds, max_items),
         daemon=True,
     )
     t.start()
