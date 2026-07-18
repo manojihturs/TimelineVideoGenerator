@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Reelframe</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">◍</span>
+    <span class="brand-name">Reelframe</span>
+  </div>
+  <div class="topbar-sub">local project → video pipeline</div>
+</header>
+
+<main id="app">
+
+  <!-- ============ VIEW: PROJECT LIST ============ -->
+  <section id="view-list" class="view">
+    <div class="view-head">
+      <div>
+        <h1>Projects</h1>
+        <p class="lede">Every project is a folder on disk. Start one below.</p>
+      </div>
+      <button id="btn-new-project" class="btn btn-primary">New project</button>
+    </div>
+
+    <div id="new-project-panel" class="panel new-project-panel hidden">
+      <label class="field-label" for="input-title">Title <span class="req">*</span></label>
+      <input id="input-title" class="field-input" type="text" placeholder="e.g. Brezza Launch Countdown" maxlength="80" />
+      <div class="panel-actions">
+        <button id="btn-cancel-project" class="btn btn-ghost">Cancel</button>
+        <button id="btn-create-project" class="btn btn-primary">Create</button>
+      </div>
+      <p id="create-error" class="error-text hidden"></p>
+    </div>
+
+    <div id="project-grid" class="project-grid"></div>
+    <p id="empty-state" class="empty-state hidden">No projects yet — create one to lay down its folders.</p>
+  </section>
+
+  <!-- ============ VIEW: PROJECT WORKSPACE ============ -->
+  <section id="view-project" class="view hidden">
+    <div class="view-head">
+      <div>
+        <button id="btn-back" class="btn-back">← Projects</button>
+        <h1 id="project-title-h1">—</h1>
+      </div>
+    </div>
+
+    <div class="filmstrip" id="filmstrip"></div>
+
+    <div class="workspace-grid">
+
+      <div class="panel">
+        <h2 class="panel-title">Checklist</h2>
+        <ul class="checklist" id="checklist"></ul>
+      </div>
+
+      <div class="panel" id="device-panel">
+        <h2 class="panel-title">Output</h2>
+
+        <div class="device-toggle" id="device-toggle">
+          <button class="device-btn active" data-device="desktop">Desktop <span class="device-sub">16:9</span></button>
+          <button class="device-btn" data-device="mobile">Mobile <span class="device-sub">9:16</span></button>
+        </div>
+
+        <div id="desktop-controls" class="output-controls">
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label">Minutes</label>
+              <input id="input-minutes" class="field-input field-input-sm" type="number" min="0" value="0" />
+            </div>
+            <div class="field">
+              <label class="field-label">Seconds</label>
+              <input id="input-seconds" class="field-input field-input-sm" type="number" min="0" max="59" value="30" />
+            </div>
+            <div class="field">
+              <label class="field-label">Resolution</label>
+              <select id="select-resolution" class="field-input field-input-sm">
+                <option value="720p">720p</option>
+                <option value="1080p" selected>1080p</option>
+                <option value="1440p">1440p</option>
+                <option value="4K">4K</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div id="mobile-controls" class="output-controls hidden">
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label">Seconds <span class="hint">(max 60)</span></label>
+              <input id="input-mobile-seconds" class="field-input field-input-sm" type="number" min="1" max="60" value="30" />
+            </div>
+          </div>
+        </div>
+
+        <button id="btn-generate" class="btn btn-primary btn-generate" disabled>Generate</button>
+        <p id="generate-blocked-reason" class="error-text hidden"></p>
+      </div>
+
+    </div>
+
+    <div class="panel thumbnail-panel">
+      <h2 class="panel-title">Thumbnail</h2>
+      <p class="lede-sm">Built to tempt a scroll-by viewer: cropped-to-fill source image, punched-up color, a bold headline, and a play cue.</p>
+
+      <div class="field-row thumb-controls">
+        <div class="field">
+          <label class="field-label">Source image</label>
+          <select id="select-thumb-source" class="field-input field-input-sm"></select>
+        </div>
+        <div class="field">
+          <label class="field-label">Aspect</label>
+          <select id="select-thumb-device" class="field-input field-input-sm">
+            <option value="desktop">Desktop 16:9</option>
+            <option value="mobile">Mobile 9:16</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Headline</label>
+        <input id="input-thumb-headline" class="field-input" type="text" placeholder="Defaults to project title" maxlength="60" />
+      </div>
+
+      <button id="btn-generate-thumb" class="btn btn-primary" disabled>Generate thumbnail</button>
+      <p id="thumb-error" class="error-text hidden"></p>
+
+      <div id="thumb-preview-wrap" class="thumb-preview-wrap hidden">
+        <img id="thumb-preview" class="thumb-preview" alt="Generated thumbnail preview" />
+      </div>
+    </div>
+
+    <div id="render-panel" class="panel render-panel hidden">
+      <h2 class="panel-title">Rendering</h2>
+      <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
+      <p id="render-message" class="render-message">Starting…</p>
+      <a id="download-link" class="btn btn-primary hidden" href="#" download>Download video</a>
+    </div>
+
+    <div class="panel exports-panel" id="exports-panel">
+      <h2 class="panel-title">Exports</h2>
+      <ul class="exports-list" id="exports-list"></ul>
+      <p id="no-exports" class="empty-state-inline">No exports yet.</p>
+    </div>
+
+  </section>
+
+</main>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>
