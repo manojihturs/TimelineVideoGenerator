@@ -507,6 +507,40 @@ $("#btn-generate-thumb").addEventListener("click", async () => {
   }
 });
 
+$("#btn-add-music").addEventListener("click", async () => {
+  const title = state.currentTitle;
+  const errEl = $("#music-error");
+  const resultEl = $("#music-result");
+  errEl.classList.add("hidden");
+  resultEl.classList.add("hidden");
+
+  const btn = $("#btn-add-music");
+  btn.disabled = true;
+  btn.textContent = "Fetching…";
+
+  try {
+    const res = await fetch(`/api/projects/${encodeURIComponent(title)}/music`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tags: $("#input-music-tags").value.trim() }),
+    });
+    const body = await res.json();
+
+    if (!res.ok) {
+      errEl.textContent = body.error || "Could not fetch music.";
+      errEl.classList.remove("hidden");
+      return;
+    }
+
+    resultEl.textContent = `Added: ${body.attribution}`;
+    resultEl.classList.remove("hidden");
+    loadProjectDetail(title); // refresh narration status in checklist
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Add background music";
+  }
+});
+
 function pollJob(jobId, title) {
   clearInterval(state.pollTimer);
   state.pollTimer = setInterval(async () => {

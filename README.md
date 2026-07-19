@@ -159,6 +159,29 @@ a project's `Narration` folder. On the next **Generate**:
 - if the Narration folder is empty, the video exports silent (this is
   optional, not required for Generate to be enabled)
 
+### Background music (optional)
+
+In a project's workspace, the **Background Music** panel pulls a track from
+[Jamendo](https://www.jamendo.com/) — a royalty-free music catalog with a
+real API — straight into `Narration/`, where it's picked up automatically
+by the mixing behavior above. Needs a free Jamendo client ID:
+
+1. Register at [devportal.jamendo.com](https://devportal.jamendo.com/) and
+   create an app to get a Client ID.
+2. Set it as an environment variable:
+   ```bash
+   export JAMENDO_CLIENT_ID=your_client_id_here
+   ```
+3. Optionally type a mood/genre (e.g. "cinematic", "upbeat") and click
+   **Add background music** — leave it blank for a popular pick.
+
+**Every Jamendo track requires attribution** (all of them are licensed
+Creative Commons "Attribution", at minimum) — there's no such thing as
+truly attribution-free royalty-free music here. The app only picks tracks
+cleared for commercial use with no ShareAlike/NoDerivatives restrictions,
+and writes the required credit line to `Narration/ATTRIBUTION.txt` — credit
+the artist if you publish the video.
+
 ## How generation works
 
 - One "card" is built per **CSV row that has a matching numbered image** —

@@ -190,6 +190,22 @@
       </div>
     </div>
 
+    <div class="panel music-panel">
+      <h2 class="panel-title">Background Music</h2>
+      <p class="lede-sm">Pulls a royalty-free track from Jamendo (commercial-safe, unrestricted-embedding
+        license only) into Narration/, where it's auto-mixed into the next export. Every Jamendo track
+        requires attribution — it's saved to Narration/ATTRIBUTION.txt, credit the artist if you publish.</p>
+
+      <div class="field">
+        <label class="field-label">Mood / genre <span class="hint">(optional, e.g. "upbeat", "cinematic")</span></label>
+        <input id="input-music-tags" class="field-input" type="text" placeholder="Leave blank for a popular pick" />
+      </div>
+
+      <button id="btn-add-music" class="btn btn-primary">Add background music</button>
+      <p id="music-error" class="error-text hidden"></p>
+      <p id="music-result" class="lede-sm hidden"></p>
+    </div>
+
     <div id="render-panel" class="panel render-panel hidden">
       <h2 class="panel-title">Rendering</h2>
       <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>

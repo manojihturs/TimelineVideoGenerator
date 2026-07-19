@@ -140,6 +140,16 @@ TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w780"
 DEFAULT_MAX_AUTO_FETCH_MOVIES = 60
 HARD_MAX_AUTO_FETCH_MOVIES = 150
 
+# Jamendo — royalty-free music API. Every track is Creative Commons
+# "Attribution" (BY) at minimum, so nothing here is truly attribution-free,
+# but filtering to ccnc=false + ccnd=false picks tracks that are cleared
+# for commercial use and unrestricted embedding (no ShareAlike/NoDerivs
+# constraints to worry about) — the safest subset for background music in
+# a video someone might publish. Attribution is written alongside the file
+# rather than silently dropped.
+JAMENDO_CLIENT_ID = os.environ.get("JAMENDO_CLIENT_ID", "")
+JAMENDO_BASE = "https://api.jamendo.com/v3.0"
+
 SUBFOLDERS = ["Assets", "Thumbnail", "Data", "Export", "Narration"]
 
 RESOLUTIONS_DESKTOP = {
@@ -513,9 +523,15 @@ def render_scroll_video(strip_path, width, height, total_seconds, out_path):
 def build_narration_track(audio_paths, out_path):
     """Concatenate one or more Narration/ audio files (any mix of formats)
     into a single track using filter_complex, which tolerates mismatched
-    codecs/sample rates better than the concat demuxer."""
+    codecs/sample rates better than the concat demuxer.
+
+    -vn (and an explicit audio-only -map) matters here: an MP3 with
+    embedded cover art has that art as a second, video-coded stream, and
+    without discarding it ffmpeg tries to carry it into the AAC/m4a output
+    and fails outright ("Could not find tag for codec h264/mjpeg in
+    stream... Nothing was written into output file")."""
     if len(audio_paths) == 1:
-        cmd = [FFMPEG_BIN, "-y", "-i", audio_paths[0], "-c:a", "aac", out_path]
+        cmd = [FFMPEG_BIN, "-y", "-i", audio_paths[0], "-map", "0:a:0", "-vn", "-c:a", "aac", out_path]
         subprocess.run(cmd, check=True, capture_output=True)
         return
 
@@ -524,7 +540,7 @@ def build_narration_track(audio_paths, out_path):
         inputs += ["-i", a]
     n = len(audio_paths)
     filter_str = "".join(f"[{i}:a]" for i in range(n)) + f"concat=n={n}:v=0:a=1[aout]"
-    cmd = [FFMPEG_BIN, "-y", *inputs, "-filter_complex", filter_str, "-map", "[aout]", "-c:a", "aac", out_path]
+    cmd = [FFMPEG_BIN, "-y", *inputs, "-filter_complex", filter_str, "-map", "[aout]", "-vn", "-c:a", "aac", out_path]
     subprocess.run(cmd, check=True, capture_output=True)
 
 
@@ -708,6 +724,61 @@ def download_image(url, dest_no_ext, timeout=20):
         for chunk in resp.iter_content(chunk_size=65536):
             f.write(chunk)
     return dest_path
+
+
+def download_audio(url, dest_no_ext, timeout=30):
+    """Like download_image but for audio. Jamendo's CDN mislabels its
+    download responses as Content-Type: text/html even though the body is
+    a real MP3 (confirmed: real file size, and Content-Disposition names
+    an .mp3 file) — a server-side quirk, not an actual error page. So the
+    real signal is the Content-Disposition filename, checked first; the
+    Content-Type audio/* check is only a fallback for other sources."""
+    resp = request_with_retries("GET", url, timeout=timeout, stream=True)
+    resp.raise_for_status()
+
+    disposition = resp.headers.get("Content-Disposition", "")
+    is_audio = bool(re.search(r"\.(mp3|ogg|wav|flac|m4a)['\"]?\s*$", disposition, re.IGNORECASE))
+    if not is_audio:
+        content_type = resp.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        is_audio = content_type.startswith("audio/")
+    if not is_audio:
+        raise RuntimeError(f"Result at {url} did not look like an audio file (no audio filename or Content-Type).")
+
+    dest_path = f"{dest_no_ext}.mp3"
+    with open(dest_path, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=65536):
+            f.write(chunk)
+    return dest_path
+
+
+def jamendo_pick_track(tags=None, timeout=15):
+    """Pick one popular, commercially-safe, unrestricted-embedding track
+    from Jamendo. ccnc=false / ccnd=false filters to tracks whose CC
+    license permits commercial use and doesn't forbid derivatives — the
+    least-restrictive subset available, though attribution (the "BY" in
+    every Jamendo license) is still required and handled by the caller."""
+    if not JAMENDO_CLIENT_ID:
+        raise RuntimeError(
+            "Jamendo is not configured. Set the JAMENDO_CLIENT_ID environment "
+            "variable (free from https://devportal.jamendo.com)."
+        )
+    params = {
+        "client_id": JAMENDO_CLIENT_ID,
+        "format": "json",
+        "limit": 1,
+        "ccnc": "false",
+        "ccnd": "false",
+        "audiodownload_allowed": "true",
+        "order": "popularity_total",
+    }
+    if tags:
+        params["tags"] = tags
+    resp = request_with_retries("GET", f"{JAMENDO_BASE}/tracks/", params=params, timeout=timeout)
+    resp.raise_for_status()
+    results = resp.json().get("results") or []
+    if not results:
+        raise RuntimeError(f'No commercially-safe Jamendo track found{f" for tags \"{tags}\"" if tags else ""}.')
+    return results[0]
 
 
 def tmdb_get(path, params=None, timeout=15):
@@ -1245,6 +1316,42 @@ def api_generate_thumbnail(title):
 def api_get_thumbnail(title, filename):
     thumb_dir = os.path.join(project_path(title), "Thumbnail")
     return send_from_directory(thumb_dir, filename)
+
+
+@app.route("/api/projects/<title>/music", methods=["POST"])
+def api_add_music(title):
+    p = project_path(title)
+    if not os.path.isdir(p):
+        abort(404)
+
+    data = request.get_json(force=True) or {}
+    tags = (data.get("tags") or "").strip()
+
+    try:
+        track = jamendo_pick_track(tags or None)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+    narration_dir = os.path.join(p, "Narration")
+    safe_name = re.sub(r"[^A-Za-z0-9]+", "_", track["name"]).strip("_")[:40] or "track"
+    dest_no_ext = os.path.join(narration_dir, f"jamendo_{track['id']}_{safe_name}")
+
+    try:
+        audio_path = download_audio(track["audiodownload"], dest_no_ext)
+    except Exception as e:
+        return jsonify({"error": f"Download failed: {e}"}), 500
+
+    attribution = f"\"{track['name']}\" by {track['artist_name']} — Jamendo ({track['license_ccurl']})"
+    with open(os.path.join(narration_dir, "ATTRIBUTION.txt"), "a", encoding="utf-8") as f:
+        f.write(attribution + "\n")
+
+    return jsonify({
+        "file": os.path.basename(audio_path),
+        "track_name": track["name"],
+        "artist": track["artist_name"],
+        "license_url": track["license_ccurl"],
+        "attribution": attribution,
+    }), 201
 
 
 if __name__ == "__main__":
