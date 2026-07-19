@@ -134,11 +134,12 @@ TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
 TMDB_BASE = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w780"
 # TMDb's /person/<id>/movie_credits returns the full filmography in one
-# call (not paginated), so this is just a runtime/rate-limit safety cap,
-# not a real limit on how many movies can be fetched — callers can raise
-# it per-request up to HARD_MAX_AUTO_FETCH_MOVIES.
-DEFAULT_MAX_AUTO_FETCH_MOVIES = 60
-HARD_MAX_AUTO_FETCH_MOVIES = 150
+# call (not paginated). By default the app fetches every eligible movie
+# it finds (dated + has a poster) — no artificial truncation. This is
+# purely an absolute safety ceiling against pathological cases (hundreds
+# of bit-part credits), not a default cap; callers can still pass a
+# smaller max_items explicitly if they want fewer.
+HARD_MAX_AUTO_FETCH_MOVIES = 300
 
 # Jamendo — royalty-free music API. Every track is Creative Commons
 # "Attribution" (BY) at minimum, so nothing here is truly attribution-free,
@@ -253,6 +254,15 @@ def numbered_images(assets_dir):
             files.append((int(m.group(1)), os.path.join(assets_dir, f)))
     files.sort(key=lambda x: x[0])
     return files
+
+
+def find_actor_photo(assets_dir):
+    """Assets/_actor.<jpg|png>, if run_auto_fetch_movie_job saved one."""
+    for ext in ("jpg", "jpeg", "png"):
+        path = os.path.join(assets_dir, f"_actor.{ext}")
+        if os.path.isfile(path):
+            return path
+    return None
 
 
 def csv_rows(data_csv_path):
@@ -471,7 +481,10 @@ def build_scroll_strip(objects, width, height, gap, cards_per_screen=CARDS_PER_S
 FPS = 30
 
 
-def render_scroll_video(strip_path, width, height, total_seconds, out_path):
+INTRO_SECONDS = 2.0
+
+
+def render_scroll_video(strip_path, width, height, total_seconds, out_path, actor_photo_path=None):
     """Pan a constant-speed crop window right-to-left across the strip —
     the scroll IS the transition, so cards are revealed one after another
     with no cuts.
@@ -483,13 +496,29 @@ def render_scroll_video(strip_path, width, height, total_seconds, out_path):
     appears to re-copy the entire multi-thousand-pixel-wide source frame
     on every single output frame rather than treating it as a cheap,
     cached view to slice from. A numpy view + stdin pipe sidesteps that
-    entirely: measured ~30x faster on a 60-card strip."""
+    entirely: measured ~30x faster on a 60-card strip.
+
+    When actor_photo_path is set, the first INTRO_SECONDS are a wipe-in:
+    the actor's cover-fit portrait fills the frame, and card #1 grows in
+    from the right edge until it fills the frame — at which point it
+    exactly matches the scroll's own first frame (x=0), so the cut into
+    the regular pan is seamless. This eats into total_seconds rather than
+    extending it, so a requested duration is still exactly what you get."""
     img = Image.open(strip_path).convert("RGB")
     arr = np.asarray(img)
     strip_w = arr.shape[1]
     travel = max(1, strip_w - width)
-    speed = travel / total_seconds  # px/sec
+
+    intro_seconds = min(INTRO_SECONDS, total_seconds * 0.5) if actor_photo_path else 0
+    scroll_seconds = total_seconds - intro_seconds
+    intro_frames = int(intro_seconds * FPS)
     n_frames = int(total_seconds * FPS)
+    speed = travel / scroll_seconds if scroll_seconds > 0 else 0  # px/sec
+
+    actor_bg = None
+    if actor_photo_path and intro_frames > 0:
+        actor_img = Image.open(actor_photo_path).convert("RGB")
+        actor_bg = np.asarray(cover_fit(actor_img, width, height))
 
     cmd = [
         FFMPEG_BIN, "-y",
@@ -512,8 +541,14 @@ def render_scroll_video(strip_path, width, height, total_seconds, out_path):
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=stderr_f)
         try:
             for i in range(n_frames):
-                x = min(int(i / FPS * speed), travel)
-                proc.stdin.write(arr[:, x:x + width, :].tobytes())
+                if i < intro_frames:
+                    reveal_w = max(1, int(width * (i + 1) / intro_frames))
+                    frame = actor_bg.copy()
+                    frame[:, width - reveal_w:width, :] = arr[:, 0:reveal_w, :]
+                else:
+                    x = min(int((i - intro_frames) / FPS * speed), travel)
+                    frame = arr[:, x:x + width, :]
+                proc.stdin.write(frame.tobytes())
             proc.stdin.close()
             proc.wait()
         finally:
@@ -852,7 +887,7 @@ def compute_verdict(budget, revenue):
     return "BLOCKBUSTER"
 
 
-def run_auto_fetch_movie_job(job_id, title, topic, max_movies=DEFAULT_MAX_AUTO_FETCH_MOVIES):
+def run_auto_fetch_movie_job(job_id, title, topic, max_movies=HARD_MAX_AUTO_FETCH_MOVIES):
     """Given an actor's name, pull their full filmography from TMDb —
     title, release year, poster, and a computed budget-vs-revenue verdict
     — sort by year ascending, and populate Assets/<n>.jpg + Data/data.csv.
@@ -897,10 +932,27 @@ def run_auto_fetch_movie_job(job_id, title, topic, max_movies=DEFAULT_MAX_AUTO_F
             seen.add(c["id"])
             movies.append(c)
         movies.sort(key=lambda m: m["release_date"])
+        found_count = len(movies)
         movies = movies[:max_movies]
 
         if not movies:
             raise RuntimeError(f"No dated, posterized movie credits found for {person['name']}.")
+
+        job["message"] = (
+            f"Found {found_count} movie(s) for {person['name']}"
+            + (f" — fetching all {found_count}" if found_count == len(movies)
+               else f" — fetching the first {len(movies)} (capped at {max_movies})")
+        )
+
+        # Actor's own portrait, used for the intro slide (Assets/_actor.jpg
+        # — leading underscore so numbered_images()'s ^(\d+)\. regex never
+        # matches it as a card). Best-effort: a missing/failed photo just
+        # means no intro gets built, not a failed fetch.
+        if person.get("profile_path"):
+            try:
+                download_image(f"{TMDB_IMAGE_BASE}{person['profile_path']}", os.path.join(assets_dir, "_actor"))
+            except Exception:
+                pass
 
         movie_ids = [m["id"] for m in movies]
         resume_from = 0  # 0-indexed count of items already completed
@@ -1039,6 +1091,11 @@ def run_render_job(job_id, title, device, width, height, total_seconds, max_item
             strip_path = os.path.join(tmp_dir, "strip.png")
             strip.save(strip_path)
 
+            # an actor portrait (Assets/_actor.jpg) — saved by the TMDb
+            # auto-fetch flow — triggers a wipe-in intro before the scroll;
+            # generic/manual categories have no such photo and just skip it
+            actor_photo_path = find_actor_photo(assets_dir)
+
             job["progress"] = 55
             job["message"] = "Rendering scroll"
             out_name = f"{title}_{device}.mp4"
@@ -1052,7 +1109,7 @@ def run_render_job(job_id, title, device, width, height, total_seconds, max_item
             narr = narration_files(p)
             if narr:
                 silent_path = os.path.join(tmp_dir, "silent.mp4")
-                render_scroll_video(strip_path, width, height, total_seconds, silent_path)
+                render_scroll_video(strip_path, width, height, total_seconds, silent_path, actor_photo_path)
 
                 job["progress"] = 90
                 job["message"] = "Mixing narration"
@@ -1060,7 +1117,7 @@ def run_render_job(job_id, title, device, width, height, total_seconds, max_item
                 build_narration_track(narr, narration_track)
                 mux_narration(silent_path, narration_track, total_seconds, tmp_out_path)
             else:
-                render_scroll_video(strip_path, width, height, total_seconds, tmp_out_path)
+                render_scroll_video(strip_path, width, height, total_seconds, tmp_out_path, actor_photo_path)
 
             os.replace(tmp_out_path, final_out_path)
 
@@ -1182,7 +1239,7 @@ def api_auto_fetch(title):
     if not category or category.get("auto_source") != "tmdb_actor":
         return jsonify({"error": "Full auto-fetch is only available for the Movie category."}), 400
 
-    max_movies = data.get("max_items", DEFAULT_MAX_AUTO_FETCH_MOVIES)
+    max_movies = data.get("max_items", HARD_MAX_AUTO_FETCH_MOVIES)
     try:
         max_movies = int(max_movies)
     except (TypeError, ValueError):
