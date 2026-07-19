@@ -163,8 +163,9 @@ a project's `Narration` folder. On the next **Generate**:
 
 In a project's workspace, the **Background Music** panel pulls a track from
 [Jamendo](https://www.jamendo.com/) — a royalty-free music catalog with a
-real API — straight into `Narration/`, where it's picked up automatically
-by the mixing behavior above. Needs a free Jamendo client ID:
+real API — into `Music/`, which is mixed in automatically alongside
+`Narration/` by the mixing behavior above (either folder, or both, feeds
+the same pipeline). Needs a free Jamendo client ID:
 
 1. Register at [devportal.jamendo.com](https://devportal.jamendo.com/) and
    create an app to get a Client ID.
@@ -173,13 +174,17 @@ by the mixing behavior above. Needs a free Jamendo client ID:
    export JAMENDO_CLIENT_ID=your_client_id_here
    ```
 3. Optionally type a mood/genre (e.g. "cinematic", "upbeat") and click
-   **Add background music** — leave it blank for a popular pick.
+   **Add background music** — leave it blank for a popular pick. Or click
+   **Indian style** for music in an Indian genre (sitar/carnatic/bhangra/
+   general "indian" tags) — independent artists' work, not actual film
+   songs. Real trending Bollywood/Tamil/Telugu/Malayalam songs are
+   copyrighted commercial recordings and this app won't source them.
 
 **Every Jamendo track requires attribution** (all of them are licensed
 Creative Commons "Attribution", at minimum) — there's no such thing as
 truly attribution-free royalty-free music here. The app only picks tracks
 cleared for commercial use with no ShareAlike/NoDerivatives restrictions,
-and writes the required credit line to `Narration/ATTRIBUTION.txt` — credit
+and writes the required credit line to `Music/ATTRIBUTION.txt` — credit
 the artist if you publish the video.
 
 ## How generation works

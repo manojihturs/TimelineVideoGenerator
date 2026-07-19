@@ -276,12 +276,19 @@ def csv_is_empty(data_csv_path):
 
 
 def narration_files(project_root):
-    d = os.path.join(project_root, "Narration")
-    if not os.path.isdir(d):
-        return []
-    files = [f for f in os.listdir(d) if f.lower().endswith(AUDIO_EXTS)]
-    files.sort()
-    return [os.path.join(d, f) for f in files]
+    """Audio files that get mixed into the next export. Scans both
+    Narration/ (spoken voiceover, the original convention) and Music/
+    (fetched background tracks) so either — or both — feed the same
+    mixing pipeline without the caller needing to know which folder a
+    given file came from."""
+    out = []
+    for folder in ("Narration", "Music"):
+        d = os.path.join(project_root, folder)
+        if not os.path.isdir(d):
+            continue
+        files = sorted(f for f in os.listdir(d) if f.lower().endswith(AUDIO_EXTS))
+        out.extend(os.path.join(d, f) for f in files)
+    return out
 
 
 def project_summary(title):
@@ -751,25 +758,20 @@ def download_audio(url, dest_no_ext, timeout=30):
     return dest_path
 
 
-def jamendo_pick_track(tags=None, timeout=15):
-    """Pick one popular, commercially-safe, unrestricted-embedding track
-    from Jamendo.
+# A handful of Indian-genre/instrument tags, checked live against
+# Jamendo's actual catalog for how many commercially-safe (ccnc=false,
+# ccnd=false) tracks each turns up: bollywood and tabla had zero, so
+# they're excluded — these are the ones that reliably return real matches.
+# This is independent-artist music *in an Indian style*, not actual film
+# songs (those are copyrighted commercial recordings, not something this
+# app can legally source).
+INDIAN_STYLE_TAGS = ["indian", "sitar", "carnatic", "bhangra"]
 
-    ccnc/ccnd are NOT real Jamendo query filter parameters — passing them
-    in the query string is silently accepted but filters nothing (verified
-    live: adding them can even zero out results that exist, seemingly by
-    coincidence rather than by actually filtering). The reliable per-track
-    signal is the `licenses` object each result carries (include=licenses),
-    so this fetches a pool of popular tracks and filters client-side for
-    licenses.ccnc == "false" and licenses.ccnd == "false" — commercial use
-    permitted, derivatives/embedding not forbidden. Attribution (the "BY"
-    in every Jamendo license) is still required regardless and handled by
-    the caller."""
-    if not JAMENDO_CLIENT_ID:
-        raise RuntimeError(
-            "Jamendo is not configured. Set the JAMENDO_CLIENT_ID environment "
-            "variable (free from https://devportal.jamendo.com)."
-        )
+
+def _jamendo_search_safe(tags, timeout):
+    """One search attempt: pool of popular tracks for `tags`, filtered
+    client-side to commercially-safe licenses. Returns None (not an
+    exception) on no match, so callers can try the next tag in a chain."""
     params = {
         "client_id": JAMENDO_CLIENT_ID,
         "format": "json",
@@ -787,9 +789,38 @@ def jamendo_pick_track(tags=None, timeout=15):
         if t.get("audiodownload") and t.get("licenses", {}).get("ccnc") == "false"
         and t.get("licenses", {}).get("ccnd") == "false"
     ]
-    if not safe:
-        raise RuntimeError(f'No commercially-safe Jamendo track found{f" for tags \"{tags}\"" if tags else ""}.')
-    return safe[0]
+    return safe[0] if safe else None
+
+
+def jamendo_pick_track(tags=None, timeout=15):
+    """Pick one popular, commercially-safe, unrestricted-embedding track
+    from Jamendo. `tags` is a single tag string, or a list of candidate
+    tag strings tried in order until one has a match — useful for a style
+    preset (see INDIAN_STYLE_TAGS) where any single tag might come up
+    empty on Jamendo's actual catalog.
+
+    ccnc/ccnd are NOT real Jamendo query filter parameters — passing them
+    in the query string is silently accepted but filters nothing (verified
+    live: adding them can even zero out results that exist, seemingly by
+    coincidence rather than by actually filtering). The reliable per-track
+    signal is the `licenses` object each result carries (include=licenses),
+    so this fetches a pool of popular tracks and filters client-side for
+    licenses.ccnc == "false" and licenses.ccnd == "false" — commercial use
+    permitted, derivatives/embedding not forbidden. Attribution (the "BY"
+    in every Jamendo license) is still required regardless and handled by
+    the caller."""
+    if not JAMENDO_CLIENT_ID:
+        raise RuntimeError(
+            "Jamendo is not configured. Set the JAMENDO_CLIENT_ID environment "
+            "variable (free from https://devportal.jamendo.com)."
+        )
+    candidates = tags if isinstance(tags, list) else [tags]
+    for candidate in candidates:
+        track = _jamendo_search_safe(candidate, timeout)
+        if track:
+            return track
+    tried = ", ".join(f'"{c}"' for c in candidates if c) or "any tag"
+    raise RuntimeError(f"No commercially-safe Jamendo track found (tried {tried}).")
 
 
 def tmdb_get(path, params=None, timeout=15):
@@ -1337,15 +1368,26 @@ def api_add_music(title):
 
     data = request.get_json(force=True) or {}
     tags = (data.get("tags") or "").strip()
+    style = (data.get("style") or "").strip().lower()
+
+    if style == "indian":
+        query = list(INDIAN_STYLE_TAGS)
+    else:
+        query = tags or None
 
     try:
-        track = jamendo_pick_track(tags or None)
+        track = jamendo_pick_track(query)
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
-    narration_dir = os.path.join(p, "Narration")
+    # Music/ isn't in SUBFOLDERS (added after older projects already
+    # existed on disk) so it's created on demand here rather than being
+    # required at project-creation time — that way existing projects
+    # don't suddenly fail their folders_ok check.
+    music_dir = os.path.join(p, "Music")
+    os.makedirs(music_dir, exist_ok=True)
     safe_name = re.sub(r"[^A-Za-z0-9]+", "_", track["name"]).strip("_")[:40] or "track"
-    dest_no_ext = os.path.join(narration_dir, f"jamendo_{track['id']}_{safe_name}")
+    dest_no_ext = os.path.join(music_dir, f"jamendo_{track['id']}_{safe_name}")
 
     try:
         audio_path = download_audio(track["audiodownload"], dest_no_ext)
@@ -1359,7 +1401,7 @@ def api_add_music(title):
     # than writing a broken "Jamendo ()" with no link at all.
     license_link = track.get("license_ccurl") or track.get("shareurl") or ""
     attribution = f"\"{track['name']}\" by {track['artist_name']} — Jamendo ({license_link})"
-    with open(os.path.join(narration_dir, "ATTRIBUTION.txt"), "a", encoding="utf-8") as f:
+    with open(os.path.join(music_dir, "ATTRIBUTION.txt"), "a", encoding="utf-8") as f:
         f.write(attribution + "\n")
 
     return jsonify({

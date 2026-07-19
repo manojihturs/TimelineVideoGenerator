@@ -363,8 +363,8 @@ function renderChecklist(p) {
     {
       ok: p.narration_ok,
       label: p.narration_ok
-        ? `Narration audio found (${p.narration_count} file${p.narration_count === 1 ? "" : "s"}) — will be mixed in`
-        : "Narration audio (optional) — none found, video will be silent",
+        ? `Narration/Music audio found (${p.narration_count} file${p.narration_count === 1 ? "" : "s"}) — will be mixed in`
+        : "Narration/Music audio (optional) — none found, video will be silent",
       optional: true,
     },
   ];
@@ -507,14 +507,13 @@ $("#btn-generate-thumb").addEventListener("click", async () => {
   }
 });
 
-$("#btn-add-music").addEventListener("click", async () => {
+async function addMusic(btn, defaultLabel, payload) {
   const title = state.currentTitle;
   const errEl = $("#music-error");
   const resultEl = $("#music-result");
   errEl.classList.add("hidden");
   resultEl.classList.add("hidden");
 
-  const btn = $("#btn-add-music");
   btn.disabled = true;
   btn.textContent = "Fetching…";
 
@@ -522,7 +521,7 @@ $("#btn-add-music").addEventListener("click", async () => {
     const res = await fetch(`/api/projects/${encodeURIComponent(title)}/music`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tags: $("#input-music-tags").value.trim() }),
+      body: JSON.stringify(payload),
     });
     const body = await res.json();
 
@@ -537,8 +536,16 @@ $("#btn-add-music").addEventListener("click", async () => {
     loadProjectDetail(title); // refresh narration status in checklist
   } finally {
     btn.disabled = false;
-    btn.textContent = "Add background music";
+    btn.textContent = defaultLabel;
   }
+}
+
+$("#btn-add-music").addEventListener("click", () => {
+  addMusic($("#btn-add-music"), "Add background music", { tags: $("#input-music-tags").value.trim() });
+});
+
+$("#btn-add-music-indian").addEventListener("click", () => {
+  addMusic($("#btn-add-music-indian"), "Indian style", { style: "indian" });
 });
 
 function pollJob(jobId, title) {

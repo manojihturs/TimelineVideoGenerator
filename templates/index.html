@@ -193,15 +193,20 @@
     <div class="panel music-panel">
       <h2 class="panel-title">Background Music</h2>
       <p class="lede-sm">Pulls a royalty-free track from Jamendo (commercial-safe, unrestricted-embedding
-        license only) into Narration/, where it's auto-mixed into the next export. Every Jamendo track
-        requires attribution — it's saved to Narration/ATTRIBUTION.txt, credit the artist if you publish.</p>
+        license only) into Music/, where it's auto-mixed into the next export same as Narration/. Every
+        Jamendo track requires attribution — it's saved to Music/ATTRIBUTION.txt, credit the artist if
+        you publish. This is independent artists' music, not actual film songs — those are copyrighted
+        commercial recordings this app won't source.</p>
 
       <div class="field">
         <label class="field-label">Mood / genre <span class="hint">(optional, e.g. "upbeat", "cinematic")</span></label>
         <input id="input-music-tags" class="field-input" type="text" placeholder="Leave blank for a popular pick" />
       </div>
 
-      <button id="btn-add-music" class="btn btn-primary">Add background music</button>
+      <div class="field-row">
+        <button id="btn-add-music" class="btn btn-primary">Add background music</button>
+        <button id="btn-add-music-indian" class="btn btn-ghost">Indian style</button>
+      </div>
       <p id="music-error" class="error-text hidden"></p>
       <p id="music-result" class="lede-sm hidden"></p>
     </div>
