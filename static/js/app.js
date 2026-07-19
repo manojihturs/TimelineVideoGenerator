@@ -10,6 +10,7 @@ const state = {
   currentTitle: null,
   device: "desktop",
   pollTimer: null,
+  renderTimerTick: null,
   categories: [],
   selectedCategory: null,
   fetchPollTimer: null,
@@ -27,6 +28,7 @@ function showList() {
   $("#view-list").classList.remove("hidden");
   state.currentTitle = null;
   clearInterval(state.pollTimer);
+  clearInterval(state.renderTimerTick);
   loadProjects();
 }
 
@@ -464,7 +466,10 @@ $("#btn-generate").addEventListener("click", async () => {
   $("#render-panel").classList.remove("hidden");
   $("#download-link").classList.add("hidden");
   $("#progress-fill").style.width = "0%";
+  $("#progress-percent").textContent = "0%";
+  $("#render-timer").textContent = "Elapsed 0:00";
   $("#render-message").textContent = "Starting…";
+  $("#render-panel").scrollIntoView({ behavior: "smooth", block: "start" });
   pollJob(body.job_id, title);
 });
 
@@ -548,23 +553,41 @@ $("#btn-add-music-indian").addEventListener("click", () => {
   addMusic($("#btn-add-music-indian"), "Indian style", { style: "indian" });
 });
 
+function formatElapsed(ms) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
 function pollJob(jobId, title) {
   clearInterval(state.pollTimer);
+  clearInterval(state.renderTimerTick);
+  const startTime = Date.now();
+
+  state.renderTimerTick = setInterval(() => {
+    $("#render-timer").textContent = `Elapsed ${formatElapsed(Date.now() - startTime)}`;
+  }, 1000);
+
   state.pollTimer = setInterval(async () => {
     const res = await fetch(`/api/jobs/${jobId}`);
     const job = await res.json();
 
     $("#progress-fill").style.width = `${job.progress}%`;
+    $("#progress-percent").textContent = `${job.progress}%`;
     $("#render-message").textContent = job.message;
 
     if (job.status === "done") {
       clearInterval(state.pollTimer);
+      clearInterval(state.renderTimerTick);
+      $("#render-timer").textContent = `Done in ${formatElapsed(Date.now() - startTime)}`;
       const link = $("#download-link");
       link.href = `/api/projects/${encodeURIComponent(title)}/export/${encodeURIComponent(job.output_path)}`;
       link.classList.remove("hidden");
       loadProjectDetail(title);
     } else if (job.status === "error") {
       clearInterval(state.pollTimer);
+      clearInterval(state.renderTimerTick);
       $("#render-message").textContent = "Error: " + job.message;
     }
   }, 1200);

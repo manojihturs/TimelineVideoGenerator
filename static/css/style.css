@@ -400,6 +400,16 @@ main#app {
   transition: width 0.3s ease;
 }
 
+.render-stats {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+}
+.render-percent { color: var(--amber); font-weight: 600; }
+.render-timer { color: var(--muted); }
+
 .render-message {
   font-family: "JetBrains Mono", monospace;
   font-size: 12px;
