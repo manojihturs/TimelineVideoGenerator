@@ -753,10 +753,18 @@ def download_audio(url, dest_no_ext, timeout=30):
 
 def jamendo_pick_track(tags=None, timeout=15):
     """Pick one popular, commercially-safe, unrestricted-embedding track
-    from Jamendo. ccnc=false / ccnd=false filters to tracks whose CC
-    license permits commercial use and doesn't forbid derivatives — the
-    least-restrictive subset available, though attribution (the "BY" in
-    every Jamendo license) is still required and handled by the caller."""
+    from Jamendo.
+
+    ccnc/ccnd are NOT real Jamendo query filter parameters — passing them
+    in the query string is silently accepted but filters nothing (verified
+    live: adding them can even zero out results that exist, seemingly by
+    coincidence rather than by actually filtering). The reliable per-track
+    signal is the `licenses` object each result carries (include=licenses),
+    so this fetches a pool of popular tracks and filters client-side for
+    licenses.ccnc == "false" and licenses.ccnd == "false" — commercial use
+    permitted, derivatives/embedding not forbidden. Attribution (the "BY"
+    in every Jamendo license) is still required regardless and handled by
+    the caller."""
     if not JAMENDO_CLIENT_ID:
         raise RuntimeError(
             "Jamendo is not configured. Set the JAMENDO_CLIENT_ID environment "
@@ -765,20 +773,23 @@ def jamendo_pick_track(tags=None, timeout=15):
     params = {
         "client_id": JAMENDO_CLIENT_ID,
         "format": "json",
-        "limit": 1,
-        "ccnc": "false",
-        "ccnd": "false",
-        "audiodownload_allowed": "true",
+        "limit": 50,
         "order": "popularity_total",
+        "include": "licenses",
     }
     if tags:
         params["tags"] = tags
     resp = request_with_retries("GET", f"{JAMENDO_BASE}/tracks/", params=params, timeout=timeout)
     resp.raise_for_status()
     results = resp.json().get("results") or []
-    if not results:
+    safe = [
+        t for t in results
+        if t.get("audiodownload") and t.get("licenses", {}).get("ccnc") == "false"
+        and t.get("licenses", {}).get("ccnd") == "false"
+    ]
+    if not safe:
         raise RuntimeError(f'No commercially-safe Jamendo track found{f" for tags \"{tags}\"" if tags else ""}.')
-    return results[0]
+    return safe[0]
 
 
 def tmdb_get(path, params=None, timeout=15):
@@ -1341,7 +1352,13 @@ def api_add_music(title):
     except Exception as e:
         return jsonify({"error": f"Download failed: {e}"}), 500
 
-    attribution = f"\"{track['name']}\" by {track['artist_name']} — Jamendo ({track['license_ccurl']})"
+    # Jamendo's license_ccurl field is sometimes blank on their end even
+    # when the track's license flags are set correctly (seen live: a
+    # ccnc=false/ccnd=false track with an empty license_ccurl) — fall back
+    # to the track's own page, which always shows the real license, rather
+    # than writing a broken "Jamendo ()" with no link at all.
+    license_link = track.get("license_ccurl") or track.get("shareurl") or ""
+    attribution = f"\"{track['name']}\" by {track['artist_name']} — Jamendo ({license_link})"
     with open(os.path.join(narration_dir, "ATTRIBUTION.txt"), "a", encoding="utf-8") as f:
         f.write(attribution + "\n")
 
@@ -1349,7 +1366,7 @@ def api_add_music(title):
         "file": os.path.basename(audio_path),
         "track_name": track["name"],
         "artist": track["artist_name"],
-        "license_url": track["license_ccurl"],
+        "license_url": license_link,
         "attribution": attribution,
     }), 201
 
