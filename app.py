@@ -435,6 +435,10 @@ def is_transient_connection_error(e):
 
 MAX_BATCH_AUTO_RETRIES = 5
 
+# Tracks the single in-flight (or last-stopped) batch job so Stop/Resume
+# don't need the caller to remember/pass a job id around.
+CURRENT_BATCH_JOB_ID = {"id": None}
+
 
 def run_auto_fetch_batch_job(job_id, auto_retry=0):
     """Process every unprocessed row in names.csv, one actor at a time:
@@ -453,6 +457,8 @@ def run_auto_fetch_batch_job(job_id, auto_retry=0):
     MAX_BATCH_AUTO_RETRIES times before actually failing the job — the
     caller never has to notice or click Run auto fetch again."""
     job = JOBS[job_id]
+    CURRENT_BATCH_JOB_ID["id"] = job_id
+    stop_event = job["stop_event"]
     try:
         pending = [n["name"] for n in read_names() if n["processed"] != "yes"]
         if not pending:
@@ -464,6 +470,10 @@ def run_auto_fetch_batch_job(job_id, auto_retry=0):
         os.makedirs(MOVIE_DB_DIR, exist_ok=True)
         total = len(pending)
         for idx, name in enumerate(pending):
+            if stop_event.is_set():
+                job["status"] = "stopped"
+                job["message"] = f"Stopped after {idx}/{total} name(s) — click Resume to continue"
+                return
             base_progress = int(idx / total * 100)
             job["progress"] = base_progress
             job["message"] = f"[{idx + 1}/{total}] Looking up \"{name}\" on TMDb"
@@ -518,9 +528,15 @@ def run_auto_fetch_batch_job(job_id, auto_retry=0):
                 with open(state_path, "w", encoding="utf-8") as f:
                     json.dump({"person_id": person["id"], "movie_ids": movie_ids, "completed": completed, "rows": rows}, f)
 
+            stopped_mid_actor = False
             for i, m in enumerate(movies, start=1):
                 if i <= resume_from:
                     continue
+                if stop_event.is_set():
+                    job["status"] = "stopped"
+                    job["message"] = f"Stopped mid-{person['name']} ({i - 1}/{len(movies)}) — click Resume to continue"
+                    stopped_mid_actor = True
+                    break
                 job["progress"] = base_progress + int((i - 1) / max(1, len(movies)) * (100 / total))
                 job["message"] = f"[{idx + 1}/{total}] {person['name']}: {i}/{len(movies)} {m['title']}"
 
@@ -533,6 +549,9 @@ def run_auto_fetch_batch_job(job_id, auto_retry=0):
                 download_image(f"{TMDB_IMAGE_BASE}{m['poster_path']}", os.path.join(assets_dir, str(i)))
                 rows.append([m["title"], year, str(budget), verdict, language])
                 save_state(i)
+
+            if stopped_mid_actor:
+                return
 
             with open(data_csv, "w", newline="", encoding="utf-8-sig") as f:
                 csv.writer(f).writerows(rows)
@@ -1539,7 +1558,43 @@ def api_names_auto_fetch():
         return jsonify({"error": "No unprocessed names in names.csv."}), 400
 
     job_id = uuid.uuid4().hex[:12]
-    JOBS[job_id] = {"status": "running", "progress": 0, "message": "Starting", "output_path": None}
+    JOBS[job_id] = {
+        "status": "running", "progress": 0, "message": "Starting", "output_path": None,
+        "stop_event": threading.Event(),
+    }
+    t = threading.Thread(target=run_auto_fetch_batch_job, args=(job_id,), daemon=True)
+    t.start()
+    return jsonify({"job_id": job_id}), 202
+
+
+@app.route("/api/names/auto-fetch/stop", methods=["POST"])
+def api_names_auto_fetch_stop():
+    job_id = CURRENT_BATCH_JOB_ID["id"]
+    job = JOBS.get(job_id) if job_id else None
+    if not job or job["status"] != "running":
+        return jsonify({"error": "No auto-fetch batch is currently running."}), 400
+    job["stop_event"].set()
+    job["message"] = "Stopping — finishing the current movie first…"
+    return jsonify({"job_id": job_id}), 202
+
+
+@app.route("/api/names/auto-fetch/resume", methods=["POST"])
+def api_names_auto_fetch_resume():
+    if not TMDB_API_KEY:
+        return jsonify({"error": "TMDb is not configured. Set the TMDB_API_KEY environment variable."}), 400
+    prev_id = CURRENT_BATCH_JOB_ID["id"]
+    prev = JOBS.get(prev_id) if prev_id else None
+    if not prev or prev["status"] != "stopped":
+        return jsonify({"error": "No stopped auto-fetch batch to resume."}), 400
+    pending = [n for n in read_names() if n["processed"] != "yes"]
+    if not pending:
+        return jsonify({"error": "No unprocessed names in names.csv."}), 400
+
+    job_id = uuid.uuid4().hex[:12]
+    JOBS[job_id] = {
+        "status": "running", "progress": 0, "message": "Resuming", "output_path": None,
+        "stop_event": threading.Event(),
+    }
     t = threading.Thread(target=run_auto_fetch_batch_job, args=(job_id,), daemon=True)
     t.start()
     return jsonify({"job_id": job_id}), 202
@@ -1688,7 +1743,7 @@ def api_job_status(job_id):
     job = JOBS.get(job_id)
     if not job:
         abort(404)
-    return jsonify(job)
+    return jsonify({k: v for k, v in job.items() if k != "stop_event"})
 
 
 @app.route("/api/projects/<title>/export/<path:filename>", methods=["GET"])

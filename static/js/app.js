@@ -184,10 +184,17 @@ $("#input-autofetch-name").addEventListener("keydown", (e) => {
   if (e.key === "Enter") $("#btn-add-name").click();
 });
 
-$("#btn-run-autofetch").addEventListener("click", async () => {
+function setAutofetchButtons(mode) {
+  // mode: "idle" | "running" | "stopped"
+  $("#btn-run-autofetch").classList.toggle("hidden", mode !== "idle");
+  $("#btn-stop-autofetch").classList.toggle("hidden", mode !== "running");
+  $("#btn-resume-autofetch").classList.toggle("hidden", mode !== "stopped");
+}
+
+async function startAutofetch(url) {
   const errEl = $("#autofetch-run-error");
   errEl.classList.add("hidden");
-  const res = await fetch("/api/names/auto-fetch", { method: "POST" });
+  const res = await fetch(url, { method: "POST" });
   const body = await res.json();
   if (!res.ok) {
     errEl.textContent = body.error || "Could not start auto fetch.";
@@ -195,8 +202,18 @@ $("#btn-run-autofetch").addEventListener("click", async () => {
     return;
   }
   $("#autofetch-progress-wrap").classList.remove("hidden");
-  $("#btn-run-autofetch").disabled = true;
+  setAutofetchButtons("running");
   pollAutofetchJob(body.job_id);
+}
+
+$("#btn-run-autofetch").addEventListener("click", () => startAutofetch("/api/names/auto-fetch"));
+$("#btn-resume-autofetch").addEventListener("click", () => startAutofetch("/api/names/auto-fetch/resume"));
+
+$("#btn-stop-autofetch").addEventListener("click", async () => {
+  $("#btn-stop-autofetch").disabled = true;
+  $("#autofetch-message").textContent = "Stopping — finishing the current movie first…";
+  await fetch("/api/names/auto-fetch/stop", { method: "POST" });
+  $("#btn-stop-autofetch").disabled = false;
 });
 
 function pollAutofetchJob(jobId) {
@@ -208,7 +225,11 @@ function pollAutofetchJob(jobId) {
     $("#autofetch-message").textContent = job.message;
     if (job.status === "done" || job.status === "error") {
       clearInterval(state.autofetchPollTimer);
-      $("#btn-run-autofetch").disabled = false;
+      setAutofetchButtons("idle");
+      loadNames();
+    } else if (job.status === "stopped") {
+      clearInterval(state.autofetchPollTimer);
+      setAutofetchButtons("stopped");
       loadNames();
     }
   }, 1500);

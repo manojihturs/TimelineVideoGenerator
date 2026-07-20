@@ -45,7 +45,11 @@
 
         <ul id="names-list" class="exports-list scroll-list" style="margin-top:16px"></ul>
 
-        <button id="btn-run-autofetch" class="btn btn-primary btn-fetch-items" style="margin-top:16px">Run auto fetch</button>
+        <div class="field-row" style="margin-top:16px">
+          <button id="btn-run-autofetch" class="btn btn-primary btn-fetch-items">Run auto fetch</button>
+          <button id="btn-stop-autofetch" class="btn btn-ghost hidden">Stop</button>
+          <button id="btn-resume-autofetch" class="btn btn-primary hidden">Resume</button>
+        </div>
         <p id="autofetch-run-error" class="error-text hidden"></p>
 
         <div id="autofetch-progress-wrap" class="panel fetch-panel hidden" style="margin-top:14px">
