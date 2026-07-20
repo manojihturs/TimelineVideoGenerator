@@ -55,6 +55,8 @@ import requests
 from flask import Flask, jsonify, request, send_from_directory, abort
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 
+Image.MAX_IMAGE_PIXELS = None  # filmstrip is our own generated content, not untrusted input
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
