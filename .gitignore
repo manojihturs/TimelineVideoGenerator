@@ -9,6 +9,10 @@ env/
 projects/*
 !projects/.gitkeep
 
+# Auto-fetch batch output/state (generated/local content)
+Movie DB/
+names.csv
+
 # Runtime-generated local config (auto-seeded with defaults on first run)
 categories.json
 

@@ -153,6 +153,22 @@ HARD_MAX_AUTO_FETCH_MOVIES = 300
 JAMENDO_CLIENT_ID = os.environ.get("JAMENDO_CLIENT_ID", "")
 JAMENDO_BASE = "https://api.jamendo.com/v3.0"
 
+MOVIE_DB_DIR = os.path.join(BASE_DIR, "Movie DB")
+NAMES_CSV_PATH = os.path.join(BASE_DIR, "names.csv")
+
+# Google Drive (optional) — a service account is used instead of interactive
+# OAuth so a background batch job can upload with no browser/consent step.
+# Set up: create a GCP project, enable the Drive API, create a service
+# account, download its JSON key, then share a Drive folder with the service
+# account's email (found in the JSON as "client_email") and put that
+# folder's id in GOOGLE_DRIVE_FOLDER_ID. Uploading is best-effort — a
+# missing/misconfigured credential just skips the Drive copy, it never
+# fails the local fetch.
+GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+GOOGLE_DRIVE_FOLDER_ID = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "")
+DRIVE_API = "https://www.googleapis.com/drive/v3"
+DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3"
+
 SUBFOLDERS = ["Assets", "Thumbnail", "Data", "Export", "Narration"]
 
 RESOLUTIONS_DESKTOP = {
@@ -285,6 +301,203 @@ def csv_is_empty(data_csv_path):
         return True
     rows = csv_rows(data_csv_path)
     return len(rows) == 0
+
+
+def read_names():
+    """names.csv: header `name,processed` (processed is yes/no). Missing
+    file reads as empty rather than erroring — it's created on first add."""
+    if not os.path.isfile(NAMES_CSV_PATH):
+        return []
+    with open(NAMES_CSV_PATH, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        return [
+            {"name": (r.get("name") or "").strip(), "processed": (r.get("processed") or "no").strip().lower()}
+            for r in reader if (r.get("name") or "").strip()
+        ]
+
+
+def write_names(names):
+    with open(NAMES_CSV_PATH, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=["name", "processed"])
+        writer.writeheader()
+        for n in names:
+            writer.writerow({"name": n["name"], "processed": n["processed"]})
+
+
+def mark_name_processed(name):
+    names = read_names()
+    for n in names:
+        if n["name"].lower() == name.lower():
+            n["processed"] = "yes"
+    write_names(names)
+
+
+def get_drive_credentials():
+    """Service-account credentials for Drive uploads, or None if unset/
+    misconfigured. Never raises — Drive upload is always best-effort."""
+    if not GOOGLE_SERVICE_ACCOUNT_JSON or not GOOGLE_DRIVE_FOLDER_ID:
+        return None
+    try:
+        from google.oauth2 import service_account
+        return service_account.Credentials.from_service_account_file(
+            GOOGLE_SERVICE_ACCOUNT_JSON,
+            scopes=["https://www.googleapis.com/auth/drive"],
+        )
+    except Exception:
+        return None
+
+
+def drive_find_or_create_folder(token, name, parent_id):
+    safe_name = name.replace("'", "\\'")
+    query = f"name = '{safe_name}' and '{parent_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    resp = requests.get(
+        f"{DRIVE_API}/files", headers={"Authorization": f"Bearer {token}"},
+        params={"q": query, "fields": "files(id,name)"}, timeout=15,
+    )
+    resp.raise_for_status()
+    existing = resp.json().get("files") or []
+    if existing:
+        return existing[0]["id"]
+
+    resp = requests.post(
+        f"{DRIVE_API}/files", headers={"Authorization": f"Bearer {token}"},
+        json={"name": name, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json()["id"]
+
+
+def drive_upload_file(token, local_path, parent_id):
+    import mimetypes
+    name = os.path.basename(local_path)
+    metadata = {"name": name, "parents": [parent_id]}
+    mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    with open(local_path, "rb") as f:
+        resp = requests.post(
+            f"{DRIVE_UPLOAD_API}/files?uploadType=multipart",
+            headers={"Authorization": f"Bearer {token}"},
+            files={
+                "metadata": (None, json.dumps(metadata), "application/json; charset=UTF-8"),
+                "file": (name, f, mime),
+            },
+            timeout=60,
+        )
+    resp.raise_for_status()
+
+
+def upload_actor_folder_to_drive(actor_dir, actor_name, job=None):
+    """Best-effort mirror of Movie DB/<actor>/{Assets,Data} into Drive under
+    GOOGLE_DRIVE_FOLDER_ID/Movie DB/<actor>/. Any failure is swallowed —
+    the local copy is always the source of truth, Drive is a bonus."""
+    creds = get_drive_credentials()
+    if not creds:
+        return
+    try:
+        from google.auth.transport.requests import Request
+        creds.refresh(Request())
+        token = creds.token
+
+        movie_db_id = drive_find_or_create_folder(token, "Movie DB", GOOGLE_DRIVE_FOLDER_ID)
+        actor_id = drive_find_or_create_folder(token, actor_name, movie_db_id)
+
+        for sub in ("Assets", "Data"):
+            local_sub = os.path.join(actor_dir, sub)
+            if not os.path.isdir(local_sub):
+                continue
+            sub_id = drive_find_or_create_folder(token, sub, actor_id)
+            for fname in sorted(os.listdir(local_sub)):
+                fpath = os.path.join(local_sub, fname)
+                if os.path.isfile(fpath):
+                    drive_upload_file(token, fpath, sub_id)
+        if job is not None:
+            job["message"] += " (uploaded to Drive)"
+    except Exception as e:
+        if job is not None:
+            job["message"] += f" (Drive upload skipped: {e})"
+
+
+def run_auto_fetch_batch_job(job_id):
+    """Process every unprocessed row in names.csv, one actor at a time:
+    Movie DB/<name>/Assets/<n>.jpg + Movie DB/<name>/Data/data.csv (movie,
+    year, budget, box office status, language — chronological ascending,
+    same ordering TMDb already returns them in). Each name is marked
+    processed in names.csv immediately after it finishes, so a crash or
+    restart mid-batch resumes cleanly from the next unprocessed row rather
+    than redoing completed actors."""
+    job = JOBS[job_id]
+    try:
+        pending = [n["name"] for n in read_names() if n["processed"] != "yes"]
+        if not pending:
+            job["status"] = "done"
+            job["progress"] = 100
+            job["message"] = "No unprocessed names in names.csv"
+            return
+
+        os.makedirs(MOVIE_DB_DIR, exist_ok=True)
+        total = len(pending)
+        for idx, name in enumerate(pending):
+            base_progress = int(idx / total * 100)
+            job["progress"] = base_progress
+            job["message"] = f"[{idx + 1}/{total}] Looking up \"{name}\" on TMDb"
+
+            actor_dir = os.path.join(MOVIE_DB_DIR, safe_title(name) or name)
+            assets_dir = os.path.join(actor_dir, "Assets")
+            data_dir = os.path.join(actor_dir, "Data")
+            os.makedirs(assets_dir, exist_ok=True)
+            os.makedirs(data_dir, exist_ok=True)
+            data_csv = os.path.join(data_dir, "data.csv")
+
+            search = tmdb_get("/search/person", {"query": name})
+            results = search.get("results") or []
+            if not results:
+                job["message"] = f"[{idx + 1}/{total}] No TMDb match for \"{name}\" — skipped"
+                mark_name_processed(name)
+                continue
+            person = results[0]
+
+            credits = tmdb_get(f"/person/{person['id']}/movie_credits")
+            cast = credits.get("cast") or []
+            seen = set()
+            movies = []
+            for c in cast:
+                if c["id"] in seen or not c.get("release_date") or not c.get("poster_path"):
+                    continue
+                seen.add(c["id"])
+                movies.append(c)
+            movies.sort(key=lambda m: m["release_date"])
+            movies = movies[:HARD_MAX_AUTO_FETCH_MOVIES]
+
+            for _, old_path in numbered_images(assets_dir):
+                os.remove(old_path)
+
+            rows = [["Movie name", "Released year", "Budget", "Box office status", "Language"]]
+            for i, m in enumerate(movies, start=1):
+                job["progress"] = base_progress + int((i - 1) / max(1, len(movies)) * (100 / total))
+                job["message"] = f"[{idx + 1}/{total}] {person['name']}: {i}/{len(movies)} {m['title']}"
+
+                detail = tmdb_get(f"/movie/{m['id']}")
+                year = (m.get("release_date") or "")[:4]
+                budget = detail.get("budget") or 0
+                verdict = compute_verdict(detail.get("budget"), detail.get("revenue"))
+                language = (detail.get("original_language") or "").upper()
+
+                download_image(f"{TMDB_IMAGE_BASE}{m['poster_path']}", os.path.join(assets_dir, str(i)))
+                rows.append([m["title"], year, str(budget), verdict, language])
+
+            with open(data_csv, "w", newline="", encoding="utf-8-sig") as f:
+                csv.writer(f).writerows(rows)
+
+            job["message"] = f"[{idx + 1}/{total}] {person['name']}: {len(movies)} movie(s) saved"
+            upload_actor_folder_to_drive(actor_dir, safe_title(name) or name, job)
+            mark_name_processed(name)
+
+        job["status"] = "done"
+        job["progress"] = 100
+        job["message"] = f"Processed {total} name(s)"
+    except Exception as e:
+        job["status"] = "error"
+        job["message"] = str(e)
 
 
 def narration_files(project_root):
@@ -1222,6 +1435,43 @@ def api_set_project_category(title):
     meta["category"] = category_name or None
     save_project_meta(title, meta)
     return jsonify(project_summary(title))
+
+
+@app.route("/api/names", methods=["GET"])
+def api_list_names():
+    names = read_names()
+    return jsonify({"names": names, "unprocessed_count": sum(1 for n in names if n["processed"] != "yes")})
+
+
+@app.route("/api/names", methods=["POST"])
+def api_add_name():
+    data = request.get_json(force=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Name is required."}), 400
+
+    names = read_names()
+    if any(n["name"].lower() == name.lower() for n in names):
+        return jsonify({"error": f'"{name}" is already in names.csv.'}), 409
+
+    names.append({"name": name, "processed": "no"})
+    write_names(names)
+    return jsonify({"names": names}), 201
+
+
+@app.route("/api/names/auto-fetch", methods=["POST"])
+def api_names_auto_fetch():
+    if not TMDB_API_KEY:
+        return jsonify({"error": "TMDb is not configured. Set the TMDB_API_KEY environment variable."}), 400
+    pending = [n for n in read_names() if n["processed"] != "yes"]
+    if not pending:
+        return jsonify({"error": "No unprocessed names in names.csv."}), 400
+
+    job_id = uuid.uuid4().hex[:12]
+    JOBS[job_id] = {"status": "running", "progress": 0, "message": "Starting", "output_path": None}
+    t = threading.Thread(target=run_auto_fetch_batch_job, args=(job_id,), daemon=True)
+    t.start()
+    return jsonify({"job_id": job_id}), 202
 
 
 @app.route("/api/projects/<title>/auto-fetch", methods=["POST"])

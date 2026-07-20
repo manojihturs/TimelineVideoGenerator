@@ -22,26 +22,64 @@
 
   <!-- ============ VIEW: PROJECT LIST ============ -->
   <section id="view-list" class="view">
-    <div class="view-head">
-      <div>
-        <h1>Projects</h1>
-        <p class="lede">Every project is a folder on disk. Start one below.</p>
-      </div>
-      <button id="btn-new-project" class="btn btn-primary">New project</button>
-    </div>
 
-    <div id="new-project-panel" class="panel new-project-panel hidden">
-      <label class="field-label" for="input-title">Title <span class="req">*</span></label>
-      <input id="input-title" class="field-input" type="text" placeholder="e.g. Brezza Launch Countdown" maxlength="80" />
-      <div class="panel-actions">
-        <button id="btn-cancel-project" class="btn btn-ghost">Cancel</button>
-        <button id="btn-create-project" class="btn btn-primary">Create</button>
-      </div>
-      <p id="create-error" class="error-text hidden"></p>
-    </div>
+    <details id="autofetch-section" class="collapsible panel">
+      <summary>
+        <span class="collapsible-title">Auto fetch — Movie DB</span>
+        <span id="autofetch-count-badge" class="collapsible-badge"></span>
+      </summary>
+      <div class="collapsible-body">
+        <p class="lede-sm">Add actor/actress names to <code>names.csv</code>, then run Auto fetch to
+          pull each one's full filmography into <code>Movie DB/&lt;name&gt;/Assets</code> +
+          <code>Movie DB/&lt;name&gt;/Data/data.csv</code> (movie, year, budget, box office status,
+          language — chronological order). Already-processed names are skipped.</p>
 
-    <div id="project-grid" class="project-grid"></div>
-    <p id="empty-state" class="empty-state hidden">No projects yet — create one to lay down its folders.</p>
+        <div class="field-row">
+          <div class="field" style="flex:1">
+            <label class="field-label">Name</label>
+            <input id="input-autofetch-name" class="field-input" type="text" placeholder="e.g. Nayanthara" />
+          </div>
+        </div>
+        <button id="btn-add-name" class="btn btn-ghost">+ Add to names.csv</button>
+        <p id="autofetch-add-error" class="error-text hidden"></p>
+
+        <ul id="names-list" class="exports-list scroll-list" style="margin-top:16px"></ul>
+
+        <button id="btn-run-autofetch" class="btn btn-primary btn-fetch-items" style="margin-top:16px">Run auto fetch</button>
+        <p id="autofetch-run-error" class="error-text hidden"></p>
+
+        <div id="autofetch-progress-wrap" class="panel fetch-panel hidden" style="margin-top:14px">
+          <div class="progress-track"><div id="autofetch-progress-fill" class="progress-fill"></div></div>
+          <p id="autofetch-message" class="render-message">Starting…</p>
+        </div>
+      </div>
+    </details>
+
+    <details id="projects-section" class="collapsible panel" open>
+      <summary>
+        <span class="collapsible-title">Projects</span>
+        <span id="projects-count-badge" class="collapsible-badge"></span>
+      </summary>
+      <div class="collapsible-body">
+        <div class="view-head">
+          <p class="lede">Every project is a folder on disk. Start one below.</p>
+          <button id="btn-new-project" class="btn btn-primary">New project</button>
+        </div>
+
+        <div id="new-project-panel" class="panel new-project-panel hidden">
+          <label class="field-label" for="input-title">Title <span class="req">*</span></label>
+          <input id="input-title" class="field-input" type="text" placeholder="e.g. Brezza Launch Countdown" maxlength="80" />
+          <div class="panel-actions">
+            <button id="btn-cancel-project" class="btn btn-ghost">Cancel</button>
+            <button id="btn-create-project" class="btn btn-primary">Create</button>
+          </div>
+          <p id="create-error" class="error-text hidden"></p>
+        </div>
+
+        <div id="project-grid" class="project-grid scroll-list"></div>
+        <p id="empty-state" class="empty-state hidden">No projects yet — create one to lay down its folders.</p>
+      </div>
+    </details>
   </section>
 
   <!-- ============ VIEW: PROJECT WORKSPACE ============ -->

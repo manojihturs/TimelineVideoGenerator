@@ -72,6 +72,9 @@ async function loadProjects() {
     card.addEventListener("click", () => showProject(p.title));
     grid.appendChild(card);
   }
+
+  const badge = $("#projects-count-badge");
+  if (badge) badge.textContent = `${projects.length} project${projects.length === 1 ? "" : "s"}`;
 }
 
 function escapeHtml(s) {
@@ -125,6 +128,91 @@ $("#input-title").addEventListener("keydown", (e) => {
 });
 
 $("#btn-back").addEventListener("click", showList);
+
+// -------------------------------------------------------------------------
+// Auto fetch (Movie DB batch)
+// -------------------------------------------------------------------------
+
+state.autofetchPollTimer = null;
+
+async function loadNames() {
+  const res = await fetch("/api/names");
+  const body = await res.json();
+  const list = $("#names-list");
+  list.innerHTML = "";
+  for (const n of body.names) {
+    const li = document.createElement("li");
+    li.innerHTML = `<span>${escapeHtml(n.name)}</span><span>${n.processed === "yes" ? "✓ processed" : "pending"}</span>`;
+    list.appendChild(li);
+  }
+  $("#btn-run-autofetch").disabled = body.unprocessed_count === 0;
+
+  const badge = $("#autofetch-count-badge");
+  if (badge) badge.textContent = `${body.unprocessed_count} pending / ${body.names.length} total`;
+
+  return body;
+}
+
+loadNames();
+
+$("#btn-add-name").addEventListener("click", async () => {
+  const input = $("#input-autofetch-name");
+  const name = input.value.trim();
+  const errEl = $("#autofetch-add-error");
+  errEl.classList.add("hidden");
+  if (!name) {
+    errEl.textContent = "Name is required.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+  const res = await fetch("/api/names", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  const body = await res.json();
+  if (!res.ok) {
+    errEl.textContent = body.error || "Could not add name.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+  input.value = "";
+  loadNames();
+});
+
+$("#input-autofetch-name").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") $("#btn-add-name").click();
+});
+
+$("#btn-run-autofetch").addEventListener("click", async () => {
+  const errEl = $("#autofetch-run-error");
+  errEl.classList.add("hidden");
+  const res = await fetch("/api/names/auto-fetch", { method: "POST" });
+  const body = await res.json();
+  if (!res.ok) {
+    errEl.textContent = body.error || "Could not start auto fetch.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+  $("#autofetch-progress-wrap").classList.remove("hidden");
+  $("#btn-run-autofetch").disabled = true;
+  pollAutofetchJob(body.job_id);
+});
+
+function pollAutofetchJob(jobId) {
+  clearInterval(state.autofetchPollTimer);
+  state.autofetchPollTimer = setInterval(async () => {
+    const res = await fetch(`/api/jobs/${jobId}`);
+    const job = await res.json();
+    $("#autofetch-progress-fill").style.width = `${job.progress}%`;
+    $("#autofetch-message").textContent = job.message;
+    if (job.status === "done" || job.status === "error") {
+      clearInterval(state.autofetchPollTimer);
+      $("#btn-run-autofetch").disabled = false;
+      loadNames();
+    }
+  }, 1500);
+}
 
 // -------------------------------------------------------------------------
 // project workspace

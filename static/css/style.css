@@ -420,6 +420,46 @@ main#app {
 #download-link { margin-top: 14px; display: inline-block; }
 #download-link.hidden { display: none; }
 
+/* ---------- collapsible sections ---------- */
+
+.collapsible { padding: 0; overflow: hidden; }
+.collapsible summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 22px;
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 600;
+  font-size: 16px;
+}
+.collapsible summary::-webkit-details-marker { display: none; }
+.collapsible summary::before {
+  content: "▸";
+  color: var(--amber);
+  margin-right: 10px;
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+.collapsible[open] summary::before { transform: rotate(90deg); }
+.collapsible summary:hover { background: var(--panel-raised); }
+
+.collapsible-title { display: flex; align-items: center; }
+.collapsible-badge {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.collapsible-body { padding: 0 22px 22px; }
+
+.scroll-list {
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
 /* ---------- exports list ---------- */
 
 .exports-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
