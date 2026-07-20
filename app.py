@@ -417,14 +417,41 @@ def upload_actor_folder_to_drive(actor_dir, actor_name, job=None):
             job["message"] += f" (Drive upload skipped: {e})"
 
 
-def run_auto_fetch_batch_job(job_id):
+def is_transient_connection_error(e):
+    """True for network blips (connection reset, timeout) worth auto-
+    retrying rather than surfacing as a failed job — the sandbox this app
+    has run in resets connections mid-request fairly often, and these are
+    never the caller's fault."""
+    if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return True
+    # ConnectionResetError can also surface unwrapped (e.g. mid-stream
+    # while reading a response body, outside request_with_retries' own
+    # retry loop around the initial request).
+    if isinstance(e, ConnectionResetError):
+        return True
+    cause = e.__cause__ or e.__context__
+    return isinstance(cause, ConnectionResetError)
+
+
+MAX_BATCH_AUTO_RETRIES = 5
+
+
+def run_auto_fetch_batch_job(job_id, auto_retry=0):
     """Process every unprocessed row in names.csv, one actor at a time:
     Movie DB/<name>/Assets/<n>.jpg + Movie DB/<name>/Data/data.csv (movie,
     year, budget, box office status, language — chronological ascending,
     same ordering TMDb already returns them in). Each name is marked
     processed in names.csv immediately after it finishes, so a crash or
     restart mid-batch resumes cleanly from the next unprocessed row rather
-    than redoing completed actors."""
+    than redoing completed actors.
+
+    Resumable per-actor too: partial progress on the *current* actor is
+    checkpointed to a state file, so a mid-actor connection reset picks up
+    from the next movie instead of re-downloading everything already
+    fetched for that actor. On a transient connection error, this function
+    auto-relaunches itself (same job id, short backoff) up to
+    MAX_BATCH_AUTO_RETRIES times before actually failing the job — the
+    caller never has to notice or click Run auto fetch again."""
     job = JOBS[job_id]
     try:
         pending = [n["name"] for n in read_names() if n["processed"] != "yes"]
@@ -447,6 +474,7 @@ def run_auto_fetch_batch_job(job_id):
             os.makedirs(assets_dir, exist_ok=True)
             os.makedirs(data_dir, exist_ok=True)
             data_csv = os.path.join(data_dir, "data.csv")
+            state_path = os.path.join(data_dir, ".autofetch_state.json")
 
             search = tmdb_get("/search/person", {"query": name})
             results = search.get("results") or []
@@ -467,12 +495,32 @@ def run_auto_fetch_batch_job(job_id):
                 movies.append(c)
             movies.sort(key=lambda m: m["release_date"])
             movies = movies[:HARD_MAX_AUTO_FETCH_MOVIES]
+            movie_ids = [m["id"] for m in movies]
 
-            for _, old_path in numbered_images(assets_dir):
-                os.remove(old_path)
-
+            resume_from = 0
             rows = [["Movie name", "Released year", "Budget", "Box office status", "Language"]]
+            state = None
+            if os.path.isfile(state_path):
+                try:
+                    with open(state_path, "r", encoding="utf-8") as f:
+                        state = json.load(f)
+                except (OSError, ValueError):
+                    state = None
+            if state and state.get("person_id") == person["id"] and state.get("movie_ids") == movie_ids:
+                resume_from = state.get("completed", 0)
+                rows = state.get("rows", rows)
+                job["message"] = f"[{idx + 1}/{total}] Resuming {person['name']} from {resume_from + 1}/{len(movies)}"
+            else:
+                for _, old_path in numbered_images(assets_dir):
+                    os.remove(old_path)
+
+            def save_state(completed):
+                with open(state_path, "w", encoding="utf-8") as f:
+                    json.dump({"person_id": person["id"], "movie_ids": movie_ids, "completed": completed, "rows": rows}, f)
+
             for i, m in enumerate(movies, start=1):
+                if i <= resume_from:
+                    continue
                 job["progress"] = base_progress + int((i - 1) / max(1, len(movies)) * (100 / total))
                 job["message"] = f"[{idx + 1}/{total}] {person['name']}: {i}/{len(movies)} {m['title']}"
 
@@ -484,9 +532,12 @@ def run_auto_fetch_batch_job(job_id):
 
                 download_image(f"{TMDB_IMAGE_BASE}{m['poster_path']}", os.path.join(assets_dir, str(i)))
                 rows.append([m["title"], year, str(budget), verdict, language])
+                save_state(i)
 
             with open(data_csv, "w", newline="", encoding="utf-8-sig") as f:
                 csv.writer(f).writerows(rows)
+            if os.path.isfile(state_path):
+                os.remove(state_path)
 
             job["message"] = f"[{idx + 1}/{total}] {person['name']}: {len(movies)} movie(s) saved"
             upload_actor_folder_to_drive(actor_dir, safe_title(name) or name, job)
@@ -496,6 +547,16 @@ def run_auto_fetch_batch_job(job_id):
         job["progress"] = 100
         job["message"] = f"Processed {total} name(s)"
     except Exception as e:
+        if is_transient_connection_error(e) and auto_retry < MAX_BATCH_AUTO_RETRIES:
+            wait = min(2.0 * (2 ** auto_retry), 30.0)
+            job["message"] = f"Connection reset — auto-retrying in {int(wait)}s ({auto_retry + 1}/{MAX_BATCH_AUTO_RETRIES})"
+
+            def relaunch():
+                time.sleep(wait)
+                run_auto_fetch_batch_job(job_id, auto_retry=auto_retry + 1)
+
+            threading.Thread(target=relaunch, daemon=True).start()
+            return
         job["status"] = "error"
         job["message"] = str(e)
 
@@ -1102,7 +1163,7 @@ def compute_verdict(budget, revenue):
     return "BLOCKBUSTER"
 
 
-def run_auto_fetch_movie_job(job_id, title, topic, max_movies=HARD_MAX_AUTO_FETCH_MOVIES):
+def run_auto_fetch_movie_job(job_id, title, topic, max_movies=HARD_MAX_AUTO_FETCH_MOVIES, auto_retry=0):
     """Given an actor's name, pull their full filmography from TMDb —
     title, release year, poster, and a computed budget-vs-revenue verdict
     — sort by year ascending, and populate Assets/<n>.jpg + Data/data.csv.
@@ -1216,6 +1277,16 @@ def run_auto_fetch_movie_job(job_id, title, topic, max_movies=HARD_MAX_AUTO_FETC
         job["progress"] = 100
         job["message"] = f"Fetched {total} movie(s) for {person['name']}"
     except Exception as e:
+        if is_transient_connection_error(e) and auto_retry < MAX_BATCH_AUTO_RETRIES:
+            wait = min(2.0 * (2 ** auto_retry), 30.0)
+            job["message"] = f"Connection reset — auto-retrying in {int(wait)}s ({auto_retry + 1}/{MAX_BATCH_AUTO_RETRIES})"
+
+            def relaunch():
+                time.sleep(wait)
+                run_auto_fetch_movie_job(job_id, title, topic, max_movies, auto_retry=auto_retry + 1)
+
+            threading.Thread(target=relaunch, daemon=True).start()
+            return
         job["status"] = "error"
         job["message"] = str(e)
 
