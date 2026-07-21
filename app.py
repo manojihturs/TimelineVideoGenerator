@@ -1546,7 +1546,31 @@ def api_add_name():
 
     names.append({"name": name, "processed": "no"})
     write_names(names)
+    start_batch_job()  # auto-launch if nothing's currently running — no manual Run click needed
     return jsonify({"names": names}), 201
+
+
+def start_batch_job():
+    """Launch run_auto_fetch_batch_job in the background and return its job
+    id, or None if nothing to do / already running. Shared by the manual
+    Run button, auto-launch-on-add, and auto-resume-on-startup, so all
+    three paths behave identically."""
+    if not TMDB_API_KEY:
+        return None
+    current = JOBS.get(CURRENT_BATCH_JOB_ID["id"]) if CURRENT_BATCH_JOB_ID["id"] else None
+    if current and current["status"] == "running":
+        return CURRENT_BATCH_JOB_ID["id"]
+    if not any(n["processed"] != "yes" for n in read_names()):
+        return None
+
+    job_id = uuid.uuid4().hex[:12]
+    JOBS[job_id] = {
+        "status": "running", "progress": 0, "message": "Starting", "output_path": None,
+        "stop_event": threading.Event(),
+    }
+    t = threading.Thread(target=run_auto_fetch_batch_job, args=(job_id,), daemon=True)
+    t.start()
+    return job_id
 
 
 @app.route("/api/names/auto-fetch", methods=["POST"])
@@ -1557,13 +1581,7 @@ def api_names_auto_fetch():
     if not pending:
         return jsonify({"error": "No unprocessed names in names.csv."}), 400
 
-    job_id = uuid.uuid4().hex[:12]
-    JOBS[job_id] = {
-        "status": "running", "progress": 0, "message": "Starting", "output_path": None,
-        "stop_event": threading.Event(),
-    }
-    t = threading.Thread(target=run_auto_fetch_batch_job, args=(job_id,), daemon=True)
-    t.start()
+    job_id = start_batch_job()
     return jsonify({"job_id": job_id}), 202
 
 
@@ -1582,21 +1600,10 @@ def api_names_auto_fetch_stop():
 def api_names_auto_fetch_resume():
     if not TMDB_API_KEY:
         return jsonify({"error": "TMDb is not configured. Set the TMDB_API_KEY environment variable."}), 400
-    prev_id = CURRENT_BATCH_JOB_ID["id"]
-    prev = JOBS.get(prev_id) if prev_id else None
-    if not prev or prev["status"] != "stopped":
-        return jsonify({"error": "No stopped auto-fetch batch to resume."}), 400
-    pending = [n for n in read_names() if n["processed"] != "yes"]
-    if not pending:
+    if not any(n["processed"] != "yes" for n in read_names()):
         return jsonify({"error": "No unprocessed names in names.csv."}), 400
 
-    job_id = uuid.uuid4().hex[:12]
-    JOBS[job_id] = {
-        "status": "running", "progress": 0, "message": "Resuming", "output_path": None,
-        "stop_event": threading.Event(),
-    }
-    t = threading.Thread(target=run_auto_fetch_batch_job, args=(job_id,), daemon=True)
-    t.start()
+    job_id = start_batch_job()
     return jsonify({"job_id": job_id}), 202
 
 
@@ -1849,4 +1856,9 @@ def api_add_music(title):
 
 
 if __name__ == "__main__":
+    # Pick up any auto-fetch left unfinished by a previous run (crash,
+    # manual stop, or this very restart) with zero manual interaction —
+    # the per-actor checkpoint on disk means this resumes mid-actor, not
+    # from scratch.
+    start_batch_job()
     app.run(debug=False, port=5050)
