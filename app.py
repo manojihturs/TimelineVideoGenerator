@@ -566,9 +566,10 @@ def run_auto_fetch_batch_job(job_id, auto_retry=0):
         job["progress"] = 100
         job["message"] = f"Processed {total} name(s)"
     except Exception as e:
-        if is_transient_connection_error(e) and auto_retry < MAX_BATCH_AUTO_RETRIES:
+        if auto_retry < MAX_BATCH_AUTO_RETRIES:
             wait = min(2.0 * (2 ** auto_retry), 30.0)
-            job["message"] = f"Connection reset — auto-retrying in {int(wait)}s ({auto_retry + 1}/{MAX_BATCH_AUTO_RETRIES})"
+            kind = "Connection reset" if is_transient_connection_error(e) else f"Error ({e})"
+            job["message"] = f"{kind} — auto-retrying in {int(wait)}s ({auto_retry + 1}/{MAX_BATCH_AUTO_RETRIES})"
 
             def relaunch():
                 time.sleep(wait)
@@ -1296,9 +1297,10 @@ def run_auto_fetch_movie_job(job_id, title, topic, max_movies=HARD_MAX_AUTO_FETC
         job["progress"] = 100
         job["message"] = f"Fetched {total} movie(s) for {person['name']}"
     except Exception as e:
-        if is_transient_connection_error(e) and auto_retry < MAX_BATCH_AUTO_RETRIES:
+        if auto_retry < MAX_BATCH_AUTO_RETRIES:
             wait = min(2.0 * (2 ** auto_retry), 30.0)
-            job["message"] = f"Connection reset — auto-retrying in {int(wait)}s ({auto_retry + 1}/{MAX_BATCH_AUTO_RETRIES})"
+            kind = "Connection reset" if is_transient_connection_error(e) else f"Error ({e})"
+            job["message"] = f"{kind} — auto-retrying in {int(wait)}s ({auto_retry + 1}/{MAX_BATCH_AUTO_RETRIES})"
 
             def relaunch():
                 time.sleep(wait)
