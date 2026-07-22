@@ -150,6 +150,11 @@ async function loadNames() {
   const badge = $("#autofetch-count-badge");
   if (badge) badge.textContent = `${body.unprocessed_count} pending / ${body.names.length} total`;
 
+  const autogenBadge = $("#autogen-count-badge");
+  if (autogenBadge) autogenBadge.textContent = `${body.videos_pending_count} pending`;
+  const runAutogenBtn = $("#btn-run-autogen");
+  if (runAutogenBtn) runAutogenBtn.disabled = body.videos_pending_count === 0;
+
   return body;
 }
 
@@ -231,6 +236,84 @@ function pollAutofetchJob(jobId) {
       clearInterval(state.autofetchPollTimer);
       setAutofetchButtons("stopped");
       loadNames();
+    }
+  }, 1500);
+}
+
+// -------------------------------------------------------------------------
+// Auto generate (Movie DB -> projects -> videos)
+// -------------------------------------------------------------------------
+
+state.autogenPollTimer = null;
+state.autogenTimerTick = null;
+
+async function refreshAutogenBadge() {
+  const res = await fetch("/api/names");
+  const body = await res.json();
+  const badge = $("#autogen-count-badge");
+  if (badge) badge.textContent = `${body.videos_pending_count} pending`;
+  $("#btn-run-autogen").disabled = body.videos_pending_count === 0;
+}
+
+refreshAutogenBadge();
+
+function setAutogenButtons(mode) {
+  $("#btn-run-autogen").classList.toggle("hidden", mode !== "idle");
+  $("#btn-stop-autogen").classList.toggle("hidden", mode !== "running");
+  $("#btn-resume-autogen").classList.toggle("hidden", mode !== "stopped");
+}
+
+async function startAutogen(url) {
+  const errEl = $("#autogen-run-error");
+  errEl.classList.add("hidden");
+  const res = await fetch(url, { method: "POST" });
+  const body = await res.json();
+  if (!res.ok) {
+    errEl.textContent = body.error || "Could not start video generation.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+  $("#autogen-progress-wrap").classList.remove("hidden");
+  setAutogenButtons("running");
+  pollAutogenJob(body.job_id);
+}
+
+$("#btn-run-autogen").addEventListener("click", () => startAutogen("/api/auto-generate-videos"));
+$("#btn-resume-autogen").addEventListener("click", () => startAutogen("/api/auto-generate-videos/resume"));
+
+$("#btn-stop-autogen").addEventListener("click", async () => {
+  $("#btn-stop-autogen").disabled = true;
+  $("#autogen-message").textContent = "Stopping — finishing the current video first…";
+  await fetch("/api/auto-generate-videos/stop", { method: "POST" });
+  $("#btn-stop-autogen").disabled = false;
+});
+
+function pollAutogenJob(jobId) {
+  clearInterval(state.autogenPollTimer);
+  clearInterval(state.autogenTimerTick);
+  const startTime = Date.now();
+
+  state.autogenTimerTick = setInterval(() => {
+    $("#autogen-timer").textContent = `Elapsed ${formatElapsed(Date.now() - startTime)}`;
+  }, 1000);
+
+  state.autogenPollTimer = setInterval(async () => {
+    const res = await fetch(`/api/jobs/${jobId}`);
+    const job = await res.json();
+    $("#autogen-progress-fill").style.width = `${job.progress}%`;
+    $("#autogen-progress-percent").textContent = `${job.progress}%`;
+    $("#autogen-message").textContent = job.message;
+
+    if (job.status === "done" || job.status === "error") {
+      clearInterval(state.autogenPollTimer);
+      clearInterval(state.autogenTimerTick);
+      setAutogenButtons("idle");
+      refreshAutogenBadge();
+    } else if (job.status === "stopped") {
+      clearInterval(state.autogenPollTimer);
+      clearInterval(state.autogenTimerTick);
+      setAutogenButtons("stopped");
+      refreshAutogenBadge();
     }
   }, 1500);
 }

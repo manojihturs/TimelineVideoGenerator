@@ -169,6 +169,17 @@ GOOGLE_DRIVE_FOLDER_ID = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "")
 DRIVE_API = "https://www.googleapis.com/drive/v3"
 DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3"
 
+# Auto Generate: turns each Movie DB/<actor> folder into a real project
+# (Assets/Data copied over, actor portrait fetched fresh) and renders a
+# fixed set of 7 videos from it — one desktop cut of the full filmography,
+# and six mobile cuts (full + one per box-office category).
+AUTO_GENERATE_BATCH_SIZE = 5
+DESKTOP_VIDEO_SECONDS = 600  # 10 min
+MOBILE_VIDEO_SECONDS = 60
+MOBILE_FULL_MAX_ITEMS = 24  # "last 24 movies" for the full mobile cut
+DESKTOP_SPEED_MULTIPLIER = 2.0  # scroll covers the strip twice as fast
+VIDEO_CATEGORIES = ["FLOP", "AVERAGE", "HIT", "SUPER HIT", "BLOCKBUSTER"]
+
 SUBFOLDERS = ["Assets", "Thumbnail", "Data", "Export", "Narration"]
 
 RESOLUTIONS_DESKTOP = {
@@ -304,24 +315,36 @@ def csv_is_empty(data_csv_path):
 
 
 def read_names():
-    """names.csv: header `name,processed` (processed is yes/no). Missing
-    file reads as empty rather than erroring — it's created on first add."""
+    """names.csv: header `name,processed,videos_generated` (both yes/no).
+    `processed` = the Movie DB TMDb fetch stage; `videos_generated` = the
+    Auto Generate stage (desktop/mobile/category videos), a separate,
+    later stage over the same name. Missing file reads as empty rather
+    than erroring — it's created on first add. videos_generated defaults
+    to "no" for rows written before that column existed."""
     if not os.path.isfile(NAMES_CSV_PATH):
         return []
     with open(NAMES_CSV_PATH, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         return [
-            {"name": (r.get("name") or "").strip(), "processed": (r.get("processed") or "no").strip().lower()}
+            {
+                "name": (r.get("name") or "").strip(),
+                "processed": (r.get("processed") or "no").strip().lower(),
+                "videos_generated": (r.get("videos_generated") or "no").strip().lower(),
+            }
             for r in reader if (r.get("name") or "").strip()
         ]
 
 
 def write_names(names):
     with open(NAMES_CSV_PATH, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=["name", "processed"])
+        writer = csv.DictWriter(f, fieldnames=["name", "processed", "videos_generated"])
         writer.writeheader()
         for n in names:
-            writer.writerow({"name": n["name"], "processed": n["processed"]})
+            writer.writerow({
+                "name": n["name"],
+                "processed": n["processed"],
+                "videos_generated": n.get("videos_generated", "no"),
+            })
 
 
 def mark_name_processed(name):
@@ -329,6 +352,14 @@ def mark_name_processed(name):
     for n in names:
         if n["name"].lower() == name.lower():
             n["processed"] = "yes"
+    write_names(names)
+
+
+def mark_name_videos_generated(name):
+    names = read_names()
+    for n in names:
+        if n["name"].lower() == name.lower():
+            n["videos_generated"] = "yes"
     write_names(names)
 
 
@@ -780,7 +811,7 @@ FPS = 30
 INTRO_SECONDS = 2.0
 
 
-def render_scroll_video(strip_path, width, height, total_seconds, out_path, actor_photo_path=None):
+def render_scroll_video(strip_path, width, height, total_seconds, out_path, actor_photo_path=None, speed_multiplier=1.0):
     """Pan a constant-speed crop window right-to-left across the strip —
     the scroll IS the transition, so cards are revealed one after another
     with no cuts.
@@ -809,7 +840,11 @@ def render_scroll_video(strip_path, width, height, total_seconds, out_path, acto
     scroll_seconds = total_seconds - intro_seconds
     intro_frames = int(intro_seconds * FPS)
     n_frames = int(total_seconds * FPS)
-    speed = travel / scroll_seconds if scroll_seconds > 0 else 0  # px/sec
+    # speed_multiplier > 1 covers the strip faster than total_seconds would
+    # imply on its own; the per-frame x below is already clamped to
+    # `travel`, so once the pan reaches the end it just holds on the last
+    # frame for whatever time remains rather than running past the strip.
+    speed = (travel / scroll_seconds if scroll_seconds > 0 else 0) * speed_multiplier  # px/sec
 
     actor_bg = None
     if actor_photo_path and intro_frames > 0:
@@ -1170,7 +1205,9 @@ def tmdb_get(path, params=None, timeout=15):
 def compute_verdict(budget, revenue):
     """Classify a movie's commercial result from budget vs revenue —
     the same structured signal box-office sites use, so this is a real
-    computed verdict, not a guess."""
+    computed verdict, not a guess. Five tiers so the Movie DB / Auto
+    Generate feature has a distinct "Super Hit" bucket between Hit and
+    Blockbuster, matching the category videos it produces."""
     if not budget or not revenue:
         return "—"
     ratio = revenue / budget
@@ -1178,8 +1215,10 @@ def compute_verdict(budget, revenue):
         return "FLOP"
     if ratio < 2:
         return "AVERAGE"
-    if ratio < 4:
+    if ratio < 3:
         return "HIT"
+    if ratio < 5:
+        return "SUPER HIT"
     return "BLOCKBUSTER"
 
 
@@ -1442,6 +1481,201 @@ def run_render_job(job_id, title, device, width, height, total_seconds, max_item
         job["message"] = str(e)
 
 
+def render_object_set(objects, width, height, total_seconds, out_path, actor_photo_path, speed_multiplier=1.0):
+    """Shared strip-build + render step used by both the manual Generate
+    button (via run_render_job) and Auto Generate — `objects` is already
+    the exact [(num, image_path, [columns...]), ...] list to put on the
+    strip, so the caller (not this function) owns filtering/truncation."""
+    if not objects:
+        raise RuntimeError("No movies to render for this set.")
+    tmp_dir = out_path + "_tmp"
+    os.makedirs(tmp_dir, exist_ok=True)
+    try:
+        gap = max(2, int((width // CARDS_PER_SCREEN) * 0.006))
+        strip, _ = build_scroll_strip(objects, width, height, gap)
+        strip_path = os.path.join(tmp_dir, "strip.png")
+        strip.save(strip_path)
+        tmp_out_path = os.path.join(tmp_dir, os.path.basename(out_path))
+        render_scroll_video(strip_path, width, height, total_seconds, tmp_out_path, actor_photo_path, speed_multiplier)
+        os.replace(tmp_out_path, out_path)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def fetch_and_save_actor_photo(name, assets_dir):
+    """Best-effort TMDb person-profile-photo fetch into Assets/_actor.jpg —
+    same convention find_actor_photo()/the intro wipe already rely on.
+    Skipped if already present (no point re-downloading on every re-run),
+    and any failure here just means no intro slide, never a failed video."""
+    if find_actor_photo(assets_dir):
+        return
+    try:
+        search = tmdb_get("/search/person", {"query": name})
+        results = search.get("results") or []
+        if results and results[0].get("profile_path"):
+            download_image(f"{TMDB_IMAGE_BASE}{results[0]['profile_path']}", os.path.join(assets_dir, "_actor"))
+    except Exception:
+        pass
+
+
+def generate_actor_video_set(job, actor_name, progress_lo, progress_hi):
+    """Turn Movie DB/<actor_name> into a real project (same folder
+    convention as any other project) and render the 7-video set: one
+    desktop cut of the full filmography (10 min, 1080p, double scroll
+    speed) and six mobile cuts (60s each) — full (last 24 movies) plus one
+    per box-office category. A category with zero matching movies is
+    skipped, not failed, since older Movie DB fetches predate the
+    Super Hit tier and won't have one."""
+    def report(frac, msg):
+        job["progress"] = int(progress_lo + (progress_hi - progress_lo) * frac)
+        job["message"] = f"{actor_name}: {msg}"
+
+    report(0.0, "Reading Movie DB data")
+    actor_dir_name = safe_title(actor_name) or actor_name
+    movie_db_actor_dir = os.path.join(MOVIE_DB_DIR, actor_dir_name)
+    src_assets_dir = os.path.join(movie_db_actor_dir, "Assets")
+    src_data_csv = os.path.join(movie_db_actor_dir, "Data", "data.csv")
+    if not os.path.isfile(src_data_csv):
+        raise RuntimeError(f'No Movie DB data found for "{actor_name}" — run Auto fetch for this name first.')
+
+    with open(src_data_csv, newline="", encoding="utf-8-sig") as f:
+        reader = list(csv.reader(f))
+    movie_rows = reader[1:] if reader else []  # first row is the header
+    src_images = dict(numbered_images(src_assets_dir))
+
+    full_objects = []
+    for i, row in enumerate(movie_rows, start=1):
+        if i not in src_images or len(row) < 4:
+            continue
+        name_col, year_col, _budget_col, status_col = row[0], row[1], row[2], row[3]
+        full_objects.append((i, src_images[i], [name_col, year_col, status_col]))
+    if not full_objects:
+        raise RuntimeError(f'No movie rows with a matching poster for "{actor_name}".')
+
+    title = safe_title(f"{actor_name} movies list")
+    p = project_path(title)
+    for sf in SUBFOLDERS:
+        os.makedirs(os.path.join(p, sf), exist_ok=True)
+    dest_assets_dir = os.path.join(p, "Assets")
+    dest_export_dir = os.path.join(p, "Export")
+    dest_data_csv = os.path.join(p, "Data", "data.csv")
+
+    report(0.03, "Copying poster images into project")
+    for num, src_path, _cols in full_objects:
+        ext = os.path.splitext(src_path)[1]
+        shutil.copy2(src_path, os.path.join(dest_assets_dir, f"{num}{ext}"))
+
+    with open(dest_data_csv, "w", newline="", encoding="utf-8-sig") as f:
+        csv.writer(f).writerows([cols for _, _, cols in full_objects])
+
+    meta = load_project_meta(title)
+    meta["category"] = "Movie"
+    save_project_meta(title, meta)
+
+    report(0.06, "Fetching actor portrait")
+    fetch_and_save_actor_photo(actor_name, dest_assets_dir)
+    actor_photo_path = find_actor_photo(dest_assets_dir)
+
+    # rebuild `objects` against the copied project paths (not the Movie DB
+    # originals) now that the copy step above may have changed extensions
+    dest_images = dict(numbered_images(dest_assets_dir))
+    objects_all = [(num, dest_images[num], cols) for num, _src, cols in full_objects if num in dest_images]
+
+    total_steps = 1 + 1 + len(VIDEO_CATEGORIES)  # desktop + mobile-full + categories
+    step = 0
+
+    def next_frac():
+        nonlocal step
+        step += 1
+        return step / total_steps
+
+    report(next_frac(), "Rendering desktop video (10 min, 1080p, 2x scroll speed)")
+    w, h = RESOLUTIONS_DESKTOP["1080p"]
+    render_object_set(
+        objects_all, w, h, DESKTOP_VIDEO_SECONDS,
+        os.path.join(dest_export_dir, f"{actor_name} Desktop.mp4"),
+        actor_photo_path, speed_multiplier=DESKTOP_SPEED_MULTIPLIER,
+    )
+
+    report(next_frac(), "Rendering mobile video (full, last 24 movies)")
+    mobile_w, mobile_h = RESOLUTION_MOBILE
+    mobile_full_objects = objects_all[-MOBILE_FULL_MAX_ITEMS:] if len(objects_all) > MOBILE_FULL_MAX_ITEMS else objects_all
+    render_object_set(
+        mobile_full_objects, mobile_w, mobile_h, MOBILE_VIDEO_SECONDS,
+        os.path.join(dest_export_dir, f"{actor_name} Mobile Full.mp4"),
+        actor_photo_path,
+    )
+
+    for category in VIDEO_CATEGORIES:
+        label = category.title()
+        frac = next_frac()
+        cat_objects = [o for o in objects_all if o[2][2].strip().upper() == category]
+        if not cat_objects:
+            report(frac, f"No {label} movies found — skipping that category video")
+            continue
+        report(frac, f"Rendering mobile video ({label}, {len(cat_objects)} movie(s))")
+        render_object_set(
+            cat_objects, mobile_w, mobile_h, MOBILE_VIDEO_SECONDS,
+            os.path.join(dest_export_dir, f"{actor_name} Mobile {label}.mp4"),
+            actor_photo_path,
+        )
+
+    report(1.0, "Done")
+
+
+CURRENT_VIDEO_GEN_JOB_ID = {"id": None}
+
+
+def run_auto_generate_videos_job(job_id, auto_retry=0):
+    """Process every Movie DB name that has finished the fetch stage
+    (processed=yes) but not yet had its videos generated, 5 at a time —
+    in practice this is just one continuous loop over all pending names,
+    checking Stop between each actor, which already gives "do 5, then
+    automatically continue with the next 5" without needing an artificial
+    batch boundary. Auto-retries the whole job on any exception (same
+    backoff pattern as the Auto fetch batch job) so a connection reset
+    partway through doesn't require the user to click Resume."""
+    job = JOBS[job_id]
+    CURRENT_VIDEO_GEN_JOB_ID["id"] = job_id
+    stop_event = job["stop_event"]
+    try:
+        pending = [n["name"] for n in read_names() if n["processed"] == "yes" and n["videos_generated"] != "yes"]
+        if not pending:
+            job["status"] = "done"
+            job["progress"] = 100
+            job["message"] = "No names pending video generation"
+            return
+
+        total = len(pending)
+        for idx, name in enumerate(pending):
+            if stop_event.is_set():
+                job["status"] = "stopped"
+                job["message"] = f"Stopped after {idx}/{total} actor(s) — click Resume to continue"
+                return
+            lo = int(idx / total * 100)
+            hi = int((idx + 1) / total * 100)
+            generate_actor_video_set(job, name, lo, hi)
+            mark_name_videos_generated(name)
+
+        job["status"] = "done"
+        job["progress"] = 100
+        job["message"] = f"Generated videos for {total} actor(s)"
+    except Exception as e:
+        if auto_retry < MAX_BATCH_AUTO_RETRIES:
+            wait = min(2.0 * (2 ** auto_retry), 30.0)
+            kind = "Connection reset" if is_transient_connection_error(e) else f"Error ({e})"
+            job["message"] = f"{kind} — auto-retrying in {int(wait)}s ({auto_retry + 1}/{MAX_BATCH_AUTO_RETRIES})"
+
+            def relaunch():
+                time.sleep(wait)
+                run_auto_generate_videos_job(job_id, auto_retry=auto_retry + 1)
+
+            threading.Thread(target=relaunch, daemon=True).start()
+            return
+        job["status"] = "error"
+        job["message"] = str(e)
+
+
 # --------------------------------------------------------------------------
 # routes
 # --------------------------------------------------------------------------
@@ -1532,7 +1766,11 @@ def api_set_project_category(title):
 @app.route("/api/names", methods=["GET"])
 def api_list_names():
     names = read_names()
-    return jsonify({"names": names, "unprocessed_count": sum(1 for n in names if n["processed"] != "yes")})
+    return jsonify({
+        "names": names,
+        "unprocessed_count": sum(1 for n in names if n["processed"] != "yes"),
+        "videos_pending_count": sum(1 for n in names if n["processed"] == "yes" and n["videos_generated"] != "yes"),
+    })
 
 
 @app.route("/api/names", methods=["POST"])
@@ -1606,6 +1844,62 @@ def api_names_auto_fetch_resume():
         return jsonify({"error": "No unprocessed names in names.csv."}), 400
 
     job_id = start_batch_job()
+    return jsonify({"job_id": job_id}), 202
+
+
+def start_video_gen_job():
+    """Same self-starting pattern as start_batch_job(): launch/reuse the
+    single in-flight Auto Generate job, or return None if nothing's
+    pending / already running."""
+    if not TMDB_API_KEY:
+        return None
+    current = JOBS.get(CURRENT_VIDEO_GEN_JOB_ID["id"]) if CURRENT_VIDEO_GEN_JOB_ID["id"] else None
+    if current and current["status"] == "running":
+        return CURRENT_VIDEO_GEN_JOB_ID["id"]
+    if not any(n["processed"] == "yes" and n["videos_generated"] != "yes" for n in read_names()):
+        return None
+
+    job_id = uuid.uuid4().hex[:12]
+    JOBS[job_id] = {
+        "status": "running", "progress": 0, "message": "Starting", "output_path": None,
+        "stop_event": threading.Event(),
+    }
+    t = threading.Thread(target=run_auto_generate_videos_job, args=(job_id,), daemon=True)
+    t.start()
+    return job_id
+
+
+@app.route("/api/auto-generate-videos", methods=["POST"])
+def api_auto_generate_videos():
+    if not TMDB_API_KEY:
+        return jsonify({"error": "TMDb is not configured. Set the TMDB_API_KEY environment variable."}), 400
+    pending = [n for n in read_names() if n["processed"] == "yes" and n["videos_generated"] != "yes"]
+    if not pending:
+        return jsonify({"error": "No fetched names are pending video generation."}), 400
+
+    job_id = start_video_gen_job()
+    return jsonify({"job_id": job_id}), 202
+
+
+@app.route("/api/auto-generate-videos/stop", methods=["POST"])
+def api_auto_generate_videos_stop():
+    job_id = CURRENT_VIDEO_GEN_JOB_ID["id"]
+    job = JOBS.get(job_id) if job_id else None
+    if not job or job["status"] != "running":
+        return jsonify({"error": "No video generation batch is currently running."}), 400
+    job["stop_event"].set()
+    job["message"] = "Stopping — finishing the current video first…"
+    return jsonify({"job_id": job_id}), 202
+
+
+@app.route("/api/auto-generate-videos/resume", methods=["POST"])
+def api_auto_generate_videos_resume():
+    if not TMDB_API_KEY:
+        return jsonify({"error": "TMDb is not configured. Set the TMDB_API_KEY environment variable."}), 400
+    if not any(n["processed"] == "yes" and n["videos_generated"] != "yes" for n in read_names()):
+        return jsonify({"error": "No fetched names are pending video generation."}), 400
+
+    job_id = start_video_gen_job()
     return jsonify({"job_id": job_id}), 202
 
 
@@ -1863,4 +2157,5 @@ if __name__ == "__main__":
     # the per-actor checkpoint on disk means this resumes mid-actor, not
     # from scratch.
     start_batch_job()
+    start_video_gen_job()
     app.run(debug=False, port=5050)

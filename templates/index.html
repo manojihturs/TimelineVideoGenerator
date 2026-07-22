@@ -59,6 +59,36 @@
       </div>
     </details>
 
+    <details id="autogen-section" class="collapsible panel">
+      <summary>
+        <span class="collapsible-title">Auto generate — Videos</span>
+        <span id="autogen-count-badge" class="collapsible-badge"></span>
+      </summary>
+      <div class="collapsible-body">
+        <p class="lede-sm">For every Movie DB name that's finished Auto fetch, builds a project
+          ("&lt;name&gt; movies list") from its Assets/Data, fetches the actor's portrait, and
+          renders 7 videos: Desktop (10 min, 1080p, 2x scroll speed), Mobile Full (60s, last 24
+          movies), and one Mobile video per box office category (Flop, Average, Hit, Super Hit,
+          Blockbuster). Processes 5 actors at a time, then automatically continues.</p>
+
+        <div class="field-row" style="margin-top:8px">
+          <button id="btn-run-autogen" class="btn btn-primary btn-fetch-items">Auto generate</button>
+          <button id="btn-stop-autogen" class="btn btn-ghost hidden">Stop</button>
+          <button id="btn-resume-autogen" class="btn btn-primary hidden">Resume</button>
+        </div>
+        <p id="autogen-run-error" class="error-text hidden"></p>
+
+        <div id="autogen-progress-wrap" class="panel fetch-panel hidden" style="margin-top:14px">
+          <div class="progress-track"><div id="autogen-progress-fill" class="progress-fill"></div></div>
+          <div class="render-stats">
+            <span id="autogen-progress-percent" class="render-percent">0%</span>
+            <span id="autogen-timer" class="render-timer">Elapsed 0:00</span>
+          </div>
+          <p id="autogen-message" class="render-message">Starting…</p>
+        </div>
+      </div>
+    </details>
+
     <details id="projects-section" class="collapsible panel" open>
       <summary>
         <span class="collapsible-title">Projects</span>
