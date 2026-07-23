@@ -180,6 +180,22 @@ MOBILE_FULL_MAX_ITEMS = 24  # "last 24 movies" for the full mobile cut
 DESKTOP_SPEED_MULTIPLIER = 2.0  # scroll covers the strip twice as fast
 VIDEO_CATEGORIES = ["FLOP", "AVERAGE", "HIT", "SUPER HIT", "BLOCKBUSTER"]
 
+# Pull Data: TMDb frequently has no budget/revenue for Indian regional
+# films, leaving Budget/Box office status blank in Movie DB data.csv.
+# Wikipedia is used instead (free, no API key) — most Indian film articles
+# carry a {{Infobox film}} with budget/gross fields. No paid/keyed box
+# office API exists for this, so this is inherently best-effort: only
+# real numbers found on the page are used, formatted into Indian Rupee
+# lakh/crore style; if the infobox has no number at all but the article
+# text describes the result in words (e.g. "blockbuster", "flop"), that
+# word is used for Box office status as a last-resort signal — nothing is
+# ever invented with zero basis on the page.
+WIKI_API = "https://en.wikipedia.org/w/api.php"
+# Wikimedia's API rejects requests with no identifying User-Agent (403) —
+# their etiquette policy requires one, this isn't optional.
+WIKI_HEADERS = {"User-Agent": "Reelframe/1.0 (local video-generator tool, non-commercial)"}
+INR_PER_USD = 83.0  # approximate, only used when a budget/gross is stated in USD
+
 SUBFOLDERS = ["Assets", "Thumbnail", "Data", "Export", "Narration"]
 
 RESOLUTIONS_DESKTOP = {
@@ -315,12 +331,14 @@ def csv_is_empty(data_csv_path):
 
 
 def read_names():
-    """names.csv: header `name,processed,videos_generated` (both yes/no).
-    `processed` = the Movie DB TMDb fetch stage; `videos_generated` = the
-    Auto Generate stage (desktop/mobile/category videos), a separate,
-    later stage over the same name. Missing file reads as empty rather
-    than erroring — it's created on first add. videos_generated defaults
-    to "no" for rows written before that column existed."""
+    """names.csv: header `name,processed,videos_generated,data_filled` (all
+    yes/no). `processed` = the Movie DB TMDb fetch stage; `videos_generated`
+    = the Auto Generate stage; `data_filled` = the Pull Data stage (Wikipedia
+    budget/box-office enrichment) — three independent stages over the same
+    name, each tracked separately so none of the three buttons step on each
+    other's progress. Missing file reads as empty rather than erroring —
+    it's created on first add. Any column defaults to "no" for rows written
+    before that column existed."""
     if not os.path.isfile(NAMES_CSV_PATH):
         return []
     with open(NAMES_CSV_PATH, newline="", encoding="utf-8-sig") as f:
@@ -330,6 +348,7 @@ def read_names():
                 "name": (r.get("name") or "").strip(),
                 "processed": (r.get("processed") or "no").strip().lower(),
                 "videos_generated": (r.get("videos_generated") or "no").strip().lower(),
+                "data_filled": (r.get("data_filled") or "no").strip().lower(),
             }
             for r in reader if (r.get("name") or "").strip()
         ]
@@ -337,13 +356,14 @@ def read_names():
 
 def write_names(names):
     with open(NAMES_CSV_PATH, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=["name", "processed", "videos_generated"])
+        writer = csv.DictWriter(f, fieldnames=["name", "processed", "videos_generated", "data_filled"])
         writer.writeheader()
         for n in names:
             writer.writerow({
                 "name": n["name"],
                 "processed": n["processed"],
                 "videos_generated": n.get("videos_generated", "no"),
+                "data_filled": n.get("data_filled", "no"),
             })
 
 
@@ -360,6 +380,14 @@ def mark_name_videos_generated(name):
     for n in names:
         if n["name"].lower() == name.lower():
             n["videos_generated"] = "yes"
+    write_names(names)
+
+
+def mark_name_data_filled(name):
+    names = read_names()
+    for n in names:
+        if n["name"].lower() == name.lower():
+            n["data_filled"] = "yes"
     write_names(names)
 
 
@@ -1222,6 +1250,131 @@ def compute_verdict(budget, revenue):
     return "BLOCKBUSTER"
 
 
+def format_inr_crore(crore_value):
+    """Indian-style figure: >=1 crore shown as "X Cr", below that in lakhs
+    ("X Lakhs") — the convention Indian box office reporting actually uses,
+    rather than a plain rupee number. Rounds to at most 1 decimal place
+    and never scientific notation (plain %g formatting flips to "2.5e+02"
+    above 100, which reads as a bug, not a number)."""
+    def clean(n):
+        n = round(n, 1)
+        return str(int(n)) if n == int(n) else str(n)
+
+    if crore_value >= 1:
+        return f"₹{clean(crore_value)} Cr"
+    return f"₹{clean(crore_value * 100)} Lakhs"
+
+
+def parse_money_to_crore(raw_value):
+    """Best-effort parse of a wikitext infobox money value into a plain
+    crore-INR float, or None if nothing recognizable is in it. Handles the
+    common forms seen on Indian film pages: the {{INRConvert}} template,
+    plain "₹X crore"/"₹X lakh" text, and USD figures ("$X million") which
+    get converted at an approximate fixed rate — clearly a rough
+    conversion, not a quoted exchange-rate-of-record."""
+    if not raw_value:
+        return None
+    text = raw_value.strip()
+
+    m = re.search(r"\{\{INR ?[Cc]onvert\|([\d.,]+)\|(cr|crore|lakh|lakhs)", text, re.IGNORECASE)
+    if m:
+        n = float(m.group(1).replace(",", ""))
+        return n if "cr" in m.group(2).lower() else n / 100
+
+    m = re.search(r"[₹Rr][s.]{0,2}\s*([\d.,]+)\s*(crore|cr\b|lakhs?)", text, re.IGNORECASE)
+    if m:
+        n = float(m.group(1).replace(",", ""))
+        return n if m.group(2).lower().startswith("cr") else n / 100
+
+    m = re.search(r"([\d.,]+)\s*(crore|lakhs?)", text, re.IGNORECASE)
+    if m:
+        n = float(m.group(1).replace(",", ""))
+        return n if m.group(2).lower().startswith("cr") else n / 100
+
+    m = re.search(r"\$\s*([\d.,]+)\s*(million|billion)", text, re.IGNORECASE)
+    if m:
+        n = float(m.group(1).replace(",", ""))
+        usd = n * (1_000_000_000 if m.group(2).lower() == "billion" else 1_000_000)
+        return usd * INR_PER_USD / 10_000_000  # -> crore
+
+    return None
+
+
+VERDICT_KEYWORDS = [
+    ("BLOCKBUSTER", ["all time blockbuster", "blockbuster"]),
+    ("SUPER HIT", ["super hit", "superhit"]),
+    ("HIT", [" hit "]),
+    ("AVERAGE", ["average", "moderate success"]),
+    ("FLOP", ["box office bomb", "commercial failure", "disaster", "flop"]),
+]
+
+
+def guess_verdict_from_text(text):
+    """Last-resort Box office status when no budget/gross numbers were
+    found at all: scan the article prose for words Wikipedia itself uses
+    to describe a Indian film's commercial reception. Grounded in the
+    page's own wording, not invented — returns None if none of these
+    phrases appear anywhere."""
+    lowered = f" {text.lower()} "
+    for verdict, phrases in VERDICT_KEYWORDS:
+        if any(p in lowered for p in phrases):
+            return verdict
+    return None
+
+
+def wikipedia_lookup_budget_status(movie_name, year):
+    """Search Wikipedia for `<movie_name> <year> film`, confirm the top
+    result is actually a film article (has a {{Infobox film}}), and pull
+    budget/gross out of it. Returns (budget_str_or_None, status_or_None).
+    Never raises for "not found" — only for actual network failures,
+    which the caller's retry logic handles the same as any other job
+    step."""
+    resp = request_with_retries(
+        "GET", WIKI_API, timeout=15, headers=WIKI_HEADERS,
+        params={
+            "action": "query", "list": "search", "format": "json",
+            "srsearch": f"{movie_name} {year} film", "srlimit": 1,
+        },
+    )
+    resp.raise_for_status()
+    hits = (resp.json().get("query") or {}).get("search") or []
+    if not hits:
+        return None, None
+    title = hits[0]["title"]
+
+    resp = request_with_retries(
+        "GET", WIKI_API, timeout=15, headers=WIKI_HEADERS,
+        params={
+            "action": "query", "prop": "revisions", "rvslots": "main",
+            "rvprop": "content", "titles": title, "format": "json",
+        },
+    )
+    resp.raise_for_status()
+    pages = (resp.json().get("query") or {}).get("pages") or {}
+    page = next(iter(pages.values()), {})
+    revisions = page.get("revisions") or []
+    if not revisions:
+        return None, None
+    wikitext = revisions[0]["slots"]["main"]["*"]
+
+    if "infobox film" not in wikitext.lower():
+        return None, None  # top hit isn't a film article — don't guess from the wrong page
+
+    budget_m = re.search(r"^\|\s*budget\s*=\s*(.+)$", wikitext, re.MULTILINE | re.IGNORECASE)
+    gross_m = re.search(r"^\|\s*gross\s*=\s*(.+)$", wikitext, re.MULTILINE | re.IGNORECASE)
+    budget_crore = parse_money_to_crore(budget_m.group(1)) if budget_m else None
+    gross_crore = parse_money_to_crore(gross_m.group(1)) if gross_m else None
+
+    budget_str = format_inr_crore(budget_crore) if budget_crore else None
+
+    if budget_crore and gross_crore:
+        status = compute_verdict(budget_crore, gross_crore)
+    else:
+        status = guess_verdict_from_text(wikitext[:6000])
+
+    return budget_str, status
+
+
 def run_auto_fetch_movie_job(job_id, title, topic, max_movies=HARD_MAX_AUTO_FETCH_MOVIES, auto_retry=0):
     """Given an actor's name, pull their full filmography from TMDb —
     title, release year, poster, and a computed budget-vs-revenue verdict
@@ -1676,6 +1829,99 @@ def run_auto_generate_videos_job(job_id, auto_retry=0):
         job["message"] = str(e)
 
 
+CURRENT_DATA_PULL_JOB_ID = {"id": None}
+
+
+def run_pull_movie_data_job(job_id, auto_retry=0):
+    """For every Movie DB name (regardless of fetch/video-gen stage), fill
+    in any Data/data.csv row still missing Budget or Box office status
+    (TMDb frequently has neither for Indian regional films) by looking the
+    movie up on Wikipedia — see wikipedia_lookup_budget_status. Only rows
+    with a blank/placeholder value are touched; anything TMDb already
+    populated is left as-is. Same Stop/auto-retry pattern as the other two
+    batch jobs, checked between movies (not just between actors) since a
+    single actor can have 50+ rows to look up."""
+    job = JOBS[job_id]
+    CURRENT_DATA_PULL_JOB_ID["id"] = job_id
+    stop_event = job["stop_event"]
+    try:
+        pending = [n["name"] for n in read_names() if n["data_filled"] != "yes"]
+        if not pending:
+            job["status"] = "done"
+            job["progress"] = 100
+            job["message"] = "No names pending data pull"
+            return
+
+        total = len(pending)
+        for idx, name in enumerate(pending):
+            if stop_event.is_set():
+                job["status"] = "stopped"
+                job["message"] = f"Stopped after {idx}/{total} actor(s) — click Resume to continue"
+                return
+
+            actor_dir = os.path.join(MOVIE_DB_DIR, safe_title(name) or name)
+            data_csv = os.path.join(actor_dir, "Data", "data.csv")
+            if not os.path.isfile(data_csv):
+                mark_name_data_filled(name)  # nothing to fill — don't get stuck retrying it forever
+                continue
+
+            with open(data_csv, newline="", encoding="utf-8-sig") as f:
+                rows = list(csv.reader(f))
+            header, movie_rows = (rows[0], rows[1:]) if rows else ([], [])
+
+            filled_any = False
+            for i, row in enumerate(movie_rows):
+                if stop_event.is_set():
+                    job["status"] = "stopped"
+                    job["message"] = f"Stopped mid-{name} — click Resume to continue"
+                    if filled_any:
+                        with open(data_csv, "w", newline="", encoding="utf-8-sig") as f:
+                            csv.writer(f).writerows([header] + movie_rows)
+                    return
+                if len(row) < 4:
+                    continue
+                movie_name, year, budget, status = row[0], row[1], row[2], row[3]
+                needs_budget = not budget or budget.strip() in ("", "0")
+                needs_status = not status or status.strip() in ("", "—")
+                if not needs_budget and not needs_status:
+                    continue
+
+                job["progress"] = int((idx + i / max(1, len(movie_rows))) / total * 100)
+                job["message"] = f"[{idx + 1}/{total}] {name}: looking up \"{movie_name}\" ({year}) on Wikipedia"
+
+                new_budget, new_status = wikipedia_lookup_budget_status(movie_name, year)
+                if needs_budget and new_budget:
+                    row[2] = new_budget
+                    filled_any = True
+                if needs_status and new_status:
+                    row[3] = new_status
+                    filled_any = True
+
+            if filled_any:
+                with open(data_csv, "w", newline="", encoding="utf-8-sig") as f:
+                    csv.writer(f).writerows([header] + movie_rows)
+
+            mark_name_data_filled(name)
+
+        job["status"] = "done"
+        job["progress"] = 100
+        job["message"] = f"Filled data for {total} actor(s)"
+    except Exception as e:
+        if auto_retry < MAX_BATCH_AUTO_RETRIES:
+            wait = min(2.0 * (2 ** auto_retry), 30.0)
+            kind = "Connection reset" if is_transient_connection_error(e) else f"Error ({e})"
+            job["message"] = f"{kind} — auto-retrying in {int(wait)}s ({auto_retry + 1}/{MAX_BATCH_AUTO_RETRIES})"
+
+            def relaunch():
+                time.sleep(wait)
+                run_pull_movie_data_job(job_id, auto_retry=auto_retry + 1)
+
+            threading.Thread(target=relaunch, daemon=True).start()
+            return
+        job["status"] = "error"
+        job["message"] = str(e)
+
+
 # --------------------------------------------------------------------------
 # routes
 # --------------------------------------------------------------------------
@@ -1770,6 +2016,7 @@ def api_list_names():
         "names": names,
         "unprocessed_count": sum(1 for n in names if n["processed"] != "yes"),
         "videos_pending_count": sum(1 for n in names if n["processed"] == "yes" and n["videos_generated"] != "yes"),
+        "data_pending_count": sum(1 for n in names if n["data_filled"] != "yes"),
     })
 
 
@@ -1900,6 +2147,53 @@ def api_auto_generate_videos_resume():
         return jsonify({"error": "No fetched names are pending video generation."}), 400
 
     job_id = start_video_gen_job()
+    return jsonify({"job_id": job_id}), 202
+
+
+def start_data_pull_job():
+    """Same self-starting pattern as the other two batch jobs. Doesn't
+    require TMDB_API_KEY (Wikipedia needs no key), only that there's at
+    least one name with data still pending."""
+    current = JOBS.get(CURRENT_DATA_PULL_JOB_ID["id"]) if CURRENT_DATA_PULL_JOB_ID["id"] else None
+    if current and current["status"] == "running":
+        return CURRENT_DATA_PULL_JOB_ID["id"]
+    if not any(n["data_filled"] != "yes" for n in read_names()):
+        return None
+
+    job_id = uuid.uuid4().hex[:12]
+    JOBS[job_id] = {
+        "status": "running", "progress": 0, "message": "Starting", "output_path": None,
+        "stop_event": threading.Event(),
+    }
+    t = threading.Thread(target=run_pull_movie_data_job, args=(job_id,), daemon=True)
+    t.start()
+    return job_id
+
+
+@app.route("/api/pull-movie-data", methods=["POST"])
+def api_pull_movie_data():
+    if not any(n["data_filled"] != "yes" for n in read_names()):
+        return jsonify({"error": "No names are pending data pull."}), 400
+    job_id = start_data_pull_job()
+    return jsonify({"job_id": job_id}), 202
+
+
+@app.route("/api/pull-movie-data/stop", methods=["POST"])
+def api_pull_movie_data_stop():
+    job_id = CURRENT_DATA_PULL_JOB_ID["id"]
+    job = JOBS.get(job_id) if job_id else None
+    if not job or job["status"] != "running":
+        return jsonify({"error": "No data pull batch is currently running."}), 400
+    job["stop_event"].set()
+    job["message"] = "Stopping — finishing the current movie first…"
+    return jsonify({"job_id": job_id}), 202
+
+
+@app.route("/api/pull-movie-data/resume", methods=["POST"])
+def api_pull_movie_data_resume():
+    if not any(n["data_filled"] != "yes" for n in read_names()):
+        return jsonify({"error": "No names are pending data pull."}), 400
+    job_id = start_data_pull_job()
     return jsonify({"job_id": job_id}), 202
 
 
@@ -2158,4 +2452,5 @@ if __name__ == "__main__":
     # from scratch.
     start_batch_job()
     start_video_gen_job()
+    start_data_pull_job()
     app.run(debug=False, port=5050)

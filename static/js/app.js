@@ -155,6 +155,11 @@ async function loadNames() {
   const runAutogenBtn = $("#btn-run-autogen");
   if (runAutogenBtn) runAutogenBtn.disabled = body.videos_pending_count === 0;
 
+  const pulldataBadge = $("#pulldata-count-badge");
+  if (pulldataBadge) pulldataBadge.textContent = `${body.data_pending_count} pending`;
+  const runPulldataBtn = $("#btn-run-pulldata");
+  if (runPulldataBtn) runPulldataBtn.disabled = body.data_pending_count === 0;
+
   return body;
 }
 
@@ -314,6 +319,84 @@ function pollAutogenJob(jobId) {
       clearInterval(state.autogenTimerTick);
       setAutogenButtons("stopped");
       refreshAutogenBadge();
+    }
+  }, 1500);
+}
+
+// -------------------------------------------------------------------------
+// Pull data (Wikipedia budget/box-office enrichment)
+// -------------------------------------------------------------------------
+
+state.pulldataPollTimer = null;
+state.pulldataTimerTick = null;
+
+async function refreshPulldataBadge() {
+  const res = await fetch("/api/names");
+  const body = await res.json();
+  const badge = $("#pulldata-count-badge");
+  if (badge) badge.textContent = `${body.data_pending_count} pending`;
+  $("#btn-run-pulldata").disabled = body.data_pending_count === 0;
+}
+
+refreshPulldataBadge();
+
+function setPulldataButtons(mode) {
+  $("#btn-run-pulldata").classList.toggle("hidden", mode !== "idle");
+  $("#btn-stop-pulldata").classList.toggle("hidden", mode !== "running");
+  $("#btn-resume-pulldata").classList.toggle("hidden", mode !== "stopped");
+}
+
+async function startPulldata(url) {
+  const errEl = $("#pulldata-run-error");
+  errEl.classList.add("hidden");
+  const res = await fetch(url, { method: "POST" });
+  const body = await res.json();
+  if (!res.ok) {
+    errEl.textContent = body.error || "Could not start data pull.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+  $("#pulldata-progress-wrap").classList.remove("hidden");
+  setPulldataButtons("running");
+  pollPulldataJob(body.job_id);
+}
+
+$("#btn-run-pulldata").addEventListener("click", () => startPulldata("/api/pull-movie-data"));
+$("#btn-resume-pulldata").addEventListener("click", () => startPulldata("/api/pull-movie-data/resume"));
+
+$("#btn-stop-pulldata").addEventListener("click", async () => {
+  $("#btn-stop-pulldata").disabled = true;
+  $("#pulldata-message").textContent = "Stopping — finishing the current movie first…";
+  await fetch("/api/pull-movie-data/stop", { method: "POST" });
+  $("#btn-stop-pulldata").disabled = false;
+});
+
+function pollPulldataJob(jobId) {
+  clearInterval(state.pulldataPollTimer);
+  clearInterval(state.pulldataTimerTick);
+  const startTime = Date.now();
+
+  state.pulldataTimerTick = setInterval(() => {
+    $("#pulldata-timer").textContent = `Elapsed ${formatElapsed(Date.now() - startTime)}`;
+  }, 1000);
+
+  state.pulldataPollTimer = setInterval(async () => {
+    const res = await fetch(`/api/jobs/${jobId}`);
+    const job = await res.json();
+    $("#pulldata-progress-fill").style.width = `${job.progress}%`;
+    $("#pulldata-progress-percent").textContent = `${job.progress}%`;
+    $("#pulldata-message").textContent = job.message;
+
+    if (job.status === "done" || job.status === "error") {
+      clearInterval(state.pulldataPollTimer);
+      clearInterval(state.pulldataTimerTick);
+      setPulldataButtons("idle");
+      refreshPulldataBadge();
+    } else if (job.status === "stopped") {
+      clearInterval(state.pulldataPollTimer);
+      clearInterval(state.pulldataTimerTick);
+      setPulldataButtons("stopped");
+      refreshPulldataBadge();
     }
   }, 1500);
 }

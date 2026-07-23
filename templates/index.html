@@ -89,6 +89,37 @@
       </div>
     </details>
 
+    <details id="pulldata-section" class="collapsible panel">
+      <summary>
+        <span class="collapsible-title">Pull data — Budget &amp; Box office</span>
+        <span id="pulldata-count-badge" class="collapsible-badge"></span>
+      </summary>
+      <div class="collapsible-body">
+        <p class="lede-sm">TMDb often has no Budget/Box office figures for Indian regional films.
+          This looks each movie up on Wikipedia instead and fills in only the blank cells in
+          Movie DB/&lt;name&gt;/Data/data.csv — anything TMDb already filled in is left alone.
+          Budget is formatted Indian-style (₹10 Cr / ₹90 Lakhs). When no number is on the page at
+          all, Box office status falls back to a best-guess from words in the article itself
+          (e.g. "blockbuster", "flop") — never a fabricated number.</p>
+
+        <div class="field-row" style="margin-top:8px">
+          <button id="btn-run-pulldata" class="btn btn-primary btn-fetch-items">Pull data</button>
+          <button id="btn-stop-pulldata" class="btn btn-ghost hidden">Stop</button>
+          <button id="btn-resume-pulldata" class="btn btn-primary hidden">Resume</button>
+        </div>
+        <p id="pulldata-run-error" class="error-text hidden"></p>
+
+        <div id="pulldata-progress-wrap" class="panel fetch-panel hidden" style="margin-top:14px">
+          <div class="progress-track"><div id="pulldata-progress-fill" class="progress-fill"></div></div>
+          <div class="render-stats">
+            <span id="pulldata-progress-percent" class="render-percent">0%</span>
+            <span id="pulldata-timer" class="render-timer">Elapsed 0:00</span>
+          </div>
+          <p id="pulldata-message" class="render-message">Starting…</p>
+        </div>
+      </div>
+    </details>
+
     <details id="projects-section" class="collapsible panel" open>
       <summary>
         <span class="collapsible-title">Projects</span>
