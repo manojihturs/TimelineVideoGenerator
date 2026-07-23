@@ -839,7 +839,7 @@ FPS = 30
 INTRO_SECONDS = 2.0
 
 
-def render_scroll_video(strip_path, width, height, total_seconds, out_path, actor_photo_path=None, speed_multiplier=1.0):
+def render_scroll_video(strip_path, width, height, total_seconds, out_path, actor_photo_path=None, speed_multiplier=1.0, stop_event=None):
     """Pan a constant-speed crop window right-to-left across the strip —
     the scroll IS the transition, so cards are revealed one after another
     with no cuts.
@@ -898,8 +898,15 @@ def render_scroll_video(strip_path, width, height, total_seconds, out_path, acto
     stderr_path = out_path + ".stderr.log"
     with open(stderr_path, "wb") as stderr_f:
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=stderr_f)
+        stopped = False
         try:
             for i in range(n_frames):
+                # checked once/sec (at FPS=30), not every frame — cheap
+                # enough to matter for immediacy, rare enough not to add
+                # measurable overhead to the frame-writing loop
+                if stop_event is not None and i % FPS == 0 and stop_event.is_set():
+                    stopped = True
+                    break
                 if i < intro_frames:
                     reveal_w = max(1, int(width * (i + 1) / intro_frames))
                     frame = actor_bg.copy()
@@ -913,6 +920,19 @@ def render_scroll_video(strip_path, width, height, total_seconds, out_path, acto
         finally:
             if proc.stdin and not proc.stdin.closed:
                 proc.stdin.close()
+            if stopped:
+                proc.kill()
+                proc.wait()
+                # Windows can hold the killed process's file handles (the
+                # stderr redirect, the partial mp4) open for a moment even
+                # after wait() returns — without this, the caller's tmp_dir
+                # cleanup can silently fail (shutil.rmtree(ignore_errors=
+                # True) gives up on the whole directory if even one file
+                # in it won't delete yet) and leave a multi-MB orphan.
+                time.sleep(0.3)
+    os.remove(stderr_path) if os.path.isfile(stderr_path) and not stopped else None
+    if stopped:
+        raise BatchStopped()
     if proc.returncode != 0:
         with open(stderr_path, "rb") as f:
             stderr_data = f.read()
@@ -1646,7 +1666,7 @@ def run_render_job(job_id, title, device, width, height, total_seconds, max_item
         job["message"] = str(e)
 
 
-def render_object_set(objects, width, height, total_seconds, out_path, actor_photo_path, speed_multiplier=1.0):
+def render_object_set(objects, width, height, total_seconds, out_path, actor_photo_path, speed_multiplier=1.0, stop_event=None):
     """Shared strip-build + render step used by both the manual Generate
     button (via run_render_job) and Auto Generate — `objects` is already
     the exact [(num, image_path, [columns...]), ...] list to put on the
@@ -1661,10 +1681,13 @@ def render_object_set(objects, width, height, total_seconds, out_path, actor_pho
         strip_path = os.path.join(tmp_dir, "strip.png")
         strip.save(strip_path)
         tmp_out_path = os.path.join(tmp_dir, os.path.basename(out_path))
-        render_scroll_video(strip_path, width, height, total_seconds, tmp_out_path, actor_photo_path, speed_multiplier)
+        render_scroll_video(strip_path, width, height, total_seconds, tmp_out_path, actor_photo_path, speed_multiplier, stop_event)
         os.replace(tmp_out_path, out_path)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+        if os.path.isdir(tmp_dir):
+            time.sleep(0.5)  # one retry — see the matching comment in render_scroll_video
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def fetch_and_save_actor_photo(name, assets_dir):
@@ -1683,7 +1706,15 @@ def fetch_and_save_actor_photo(name, assets_dir):
         pass
 
 
-def generate_actor_video_set(job, actor_name, progress_lo, progress_hi):
+class BatchStopped(Exception):
+    """Raised to unwind out of generate_actor_video_set as soon as the
+    current video finishes, when the user clicked Stop mid-actor — a plain
+    stop_event check between actors alone meant Stop could take several
+    more minutes to actually land (up to 7 videos' worth), which doesn't
+    match "stop immediately"."""
+
+
+def generate_actor_video_set(job, actor_name, progress_lo, progress_hi, stop_event=None):
     """Turn Movie DB/<actor_name> into a real project (same folder
     convention as any other project) and render the 7-video set: one
     desktop cut of the full filmography (10 min, 1080p, double scroll
@@ -1691,6 +1722,10 @@ def generate_actor_video_set(job, actor_name, progress_lo, progress_hi):
     per box-office category. A category with zero matching movies is
     skipped, not failed, since older Movie DB fetches predate the
     Super Hit tier and won't have one."""
+    def check_stop():
+        if stop_event is not None and stop_event.is_set():
+            raise BatchStopped()
+
     def report(frac, msg):
         job["progress"] = int(progress_lo + (progress_hi - progress_lo) * frac)
         job["message"] = f"{actor_name}: {msg}"
@@ -1754,24 +1789,27 @@ def generate_actor_video_set(job, actor_name, progress_lo, progress_hi):
         step += 1
         return step / total_steps
 
+    check_stop()
     report(next_frac(), "Rendering desktop video (10 min, 1080p, 2x scroll speed)")
     w, h = RESOLUTIONS_DESKTOP["1080p"]
     render_object_set(
         objects_all, w, h, DESKTOP_VIDEO_SECONDS,
         os.path.join(dest_export_dir, f"{actor_name} Desktop.mp4"),
-        actor_photo_path, speed_multiplier=DESKTOP_SPEED_MULTIPLIER,
+        actor_photo_path, speed_multiplier=DESKTOP_SPEED_MULTIPLIER, stop_event=stop_event,
     )
 
+    check_stop()
     report(next_frac(), "Rendering mobile video (full, last 24 movies)")
     mobile_w, mobile_h = RESOLUTION_MOBILE
     mobile_full_objects = objects_all[-MOBILE_FULL_MAX_ITEMS:] if len(objects_all) > MOBILE_FULL_MAX_ITEMS else objects_all
     render_object_set(
         mobile_full_objects, mobile_w, mobile_h, MOBILE_VIDEO_SECONDS,
         os.path.join(dest_export_dir, f"{actor_name} Mobile Full.mp4"),
-        actor_photo_path,
+        actor_photo_path, stop_event=stop_event,
     )
 
     for category in VIDEO_CATEGORIES:
+        check_stop()
         label = category.title()
         frac = next_frac()
         cat_objects = [o for o in objects_all if o[2][2].strip().upper() == category]
@@ -1782,7 +1820,7 @@ def generate_actor_video_set(job, actor_name, progress_lo, progress_hi):
         render_object_set(
             cat_objects, mobile_w, mobile_h, MOBILE_VIDEO_SECONDS,
             os.path.join(dest_export_dir, f"{actor_name} Mobile {label}.mp4"),
-            actor_photo_path,
+            actor_photo_path, stop_event=stop_event,
         )
 
     report(1.0, "Done")
@@ -1827,7 +1865,11 @@ def run_auto_generate_videos_job(job_id, auto_retry=0):
             lo = int(idx / total * 100)
             hi = int((idx + 1) / total * 100)
             try:
-                generate_actor_video_set(job, name, lo, hi)
+                generate_actor_video_set(job, name, lo, hi, stop_event=stop_event)
+            except BatchStopped:
+                job["status"] = "stopped"
+                job["message"] = f"Stopped after {idx}/{total} actor(s) — click Resume to continue"
+                return
             except RuntimeError as e:
                 job["message"] = f"{name}: skipped ({e})"
             mark_name_videos_generated(name)
