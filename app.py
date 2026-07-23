@@ -1073,11 +1073,23 @@ def request_with_retries(method, url, max_attempts=5, **kwargs):
     (reset/timeout) with a short backoff. Real network calls to third-party
     APIs fail intermittently; a multi-step fetch job (search + per-item
     detail + image download) has many chances to hit one, so this keeps a
-    whole job from dying on a single blip."""
+    whole job from dying on a single blip.
+
+    Also retries HTTP 429 (rate limited) — this surfaces as a normal
+    response, not an exception, so it needs its own check rather than
+    falling out of the except clause below. Honors a Retry-After header
+    when the server sends one (Wikipedia's API does), otherwise the same
+    exponential backoff as a connection error."""
     last_exc = None
     for attempt in range(1, max_attempts + 1):
         try:
-            return requests.request(method, url, **kwargs)
+            resp = requests.request(method, url, **kwargs)
+            if resp.status_code == 429 and attempt < max_attempts:
+                retry_after = resp.headers.get("Retry-After")
+                wait = float(retry_after) if retry_after and retry_after.isdigit() else min(2.0 * (2 ** (attempt - 1)), 30.0)
+                time.sleep(wait)
+                continue
+            return resp
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             last_exc = e
             if attempt < max_attempts:
@@ -1840,7 +1852,15 @@ def run_pull_movie_data_job(job_id, auto_retry=0):
     with a blank/placeholder value are touched; anything TMDb already
     populated is left as-is. Same Stop/auto-retry pattern as the other two
     batch jobs, checked between movies (not just between actors) since a
-    single actor can have 50+ rows to look up."""
+    single actor can have 50+ rows to look up.
+
+    Two things matter at this scale (potentially thousands of lookups
+    across all actors): a small delay between requests so Wikipedia's API
+    isn't hammered fast enough to trip its own rate limit in the first
+    place (request_with_retries already handles a 429 if one slips through
+    anyway), and saving the CSV after every movie rather than once per
+    actor — a rate-limit or network error on movie 40 of 50 shouldn't cost
+    the 39 successful lookups that came before it."""
     job = JOBS[job_id]
     CURRENT_DATA_PULL_JOB_ID["id"] = job_id
     stop_event = job["stop_event"]
@@ -1869,14 +1889,14 @@ def run_pull_movie_data_job(job_id, auto_retry=0):
                 rows = list(csv.reader(f))
             header, movie_rows = (rows[0], rows[1:]) if rows else ([], [])
 
-            filled_any = False
+            def save():
+                with open(data_csv, "w", newline="", encoding="utf-8-sig") as f:
+                    csv.writer(f).writerows([header] + movie_rows)
+
             for i, row in enumerate(movie_rows):
                 if stop_event.is_set():
                     job["status"] = "stopped"
                     job["message"] = f"Stopped mid-{name} — click Resume to continue"
-                    if filled_any:
-                        with open(data_csv, "w", newline="", encoding="utf-8-sig") as f:
-                            csv.writer(f).writerows([header] + movie_rows)
                     return
                 if len(row) < 4:
                     continue
@@ -1889,17 +1909,28 @@ def run_pull_movie_data_job(job_id, auto_retry=0):
                 job["progress"] = int((idx + i / max(1, len(movie_rows))) / total * 100)
                 job["message"] = f"[{idx + 1}/{total}] {name}: looking up \"{movie_name}\" ({year}) on Wikipedia"
 
-                new_budget, new_status = wikipedia_lookup_budget_status(movie_name, year)
+                try:
+                    new_budget, new_status = wikipedia_lookup_budget_status(movie_name, year)
+                except Exception as e:
+                    # one bad/rate-limited movie shouldn't sink everything
+                    # already found for this actor — skip it, keep going,
+                    # and it'll simply still look blank next run (safe to
+                    # retry, nothing was corrupted).
+                    job["message"] = f"[{idx + 1}/{total}] {name}: \"{movie_name}\" lookup failed ({e}) — skipped"
+                    time.sleep(2.0)
+                    continue
+                finally:
+                    time.sleep(0.5)  # be a polite, slow client to Wikipedia's API
+
+                changed = False
                 if needs_budget and new_budget:
                     row[2] = new_budget
-                    filled_any = True
+                    changed = True
                 if needs_status and new_status:
                     row[3] = new_status
-                    filled_any = True
-
-            if filled_any:
-                with open(data_csv, "w", newline="", encoding="utf-8-sig") as f:
-                    csv.writer(f).writerows([header] + movie_rows)
+                    changed = True
+                if changed:
+                    save()
 
             mark_name_data_filled(name)
 
