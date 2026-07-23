@@ -1799,7 +1799,14 @@ def run_auto_generate_videos_job(job_id, auto_retry=0):
     automatically continue with the next 5" without needing an artificial
     batch boundary. Auto-retries the whole job on any exception (same
     backoff pattern as the Auto fetch batch job) so a connection reset
-    partway through doesn't require the user to click Resume."""
+    partway through doesn't require the user to click Resume.
+
+    A name that's marked processed=yes but has no real Movie DB data (Auto
+    fetch found no TMDb match for it and skipped it without creating a
+    folder — a real, non-transient case, not a network blip) is skipped
+    here rather than treated as a failure: letting it propagate up would
+    exhaust all 5 auto-retries on the SAME unfixable actor and kill the
+    whole job, silently blocking every actor queued after it."""
     job = JOBS[job_id]
     CURRENT_VIDEO_GEN_JOB_ID["id"] = job_id
     stop_event = job["stop_event"]
@@ -1819,7 +1826,10 @@ def run_auto_generate_videos_job(job_id, auto_retry=0):
                 return
             lo = int(idx / total * 100)
             hi = int((idx + 1) / total * 100)
-            generate_actor_video_set(job, name, lo, hi)
+            try:
+                generate_actor_video_set(job, name, lo, hi)
+            except RuntimeError as e:
+                job["message"] = f"{name}: skipped ({e})"
             mark_name_videos_generated(name)
 
         job["status"] = "done"
