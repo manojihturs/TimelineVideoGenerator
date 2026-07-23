@@ -2037,12 +2037,43 @@ def api_add_name():
     return jsonify({"names": names}), 201
 
 
+PAUSE_STATE_PATH = os.path.join(BASE_DIR, ".batch_pause_state.json")
+
+
+def is_paused(key):
+    """Whether the user explicitly clicked Stop on this batch (key is
+    "autofetch"/"autogen"/"pulldata") and hasn't clicked Run/Resume since.
+    Persisted to disk (unlike JOBS, which is only in memory) specifically
+    so an explicit Stop survives an app restart — otherwise the existing
+    auto-resume-on-startup behavior would silently un-stop it."""
+    if not os.path.isfile(PAUSE_STATE_PATH):
+        return False
+    try:
+        with open(PAUSE_STATE_PATH, "r", encoding="utf-8") as f:
+            return bool(json.load(f).get(key))
+    except (OSError, ValueError):
+        return False
+
+
+def set_paused(key, value):
+    state = {}
+    if os.path.isfile(PAUSE_STATE_PATH):
+        try:
+            with open(PAUSE_STATE_PATH, "r", encoding="utf-8") as f:
+                state = json.load(f)
+        except (OSError, ValueError):
+            state = {}
+    state[key] = value
+    with open(PAUSE_STATE_PATH, "w", encoding="utf-8") as f:
+        json.dump(state, f)
+
+
 def start_batch_job():
     """Launch run_auto_fetch_batch_job in the background and return its job
-    id, or None if nothing to do / already running. Shared by the manual
-    Run button, auto-launch-on-add, and auto-resume-on-startup, so all
-    three paths behave identically."""
-    if not TMDB_API_KEY:
+    id, or None if nothing to do / already running / explicitly paused.
+    Shared by the manual Run button, auto-launch-on-add, and auto-resume-
+    on-startup, so all three paths behave identically."""
+    if not TMDB_API_KEY or is_paused("autofetch"):
         return None
     current = JOBS.get(CURRENT_BATCH_JOB_ID["id"]) if CURRENT_BATCH_JOB_ID["id"] else None
     if current and current["status"] == "running":
@@ -2068,6 +2099,10 @@ def api_names_auto_fetch():
     if not pending:
         return jsonify({"error": "No unprocessed names in names.csv."}), 400
 
+    # a restart drops JOBS entirely, so a UI page load after one can't tell
+    # "paused" from "idle" and shows the plain Run button either way —
+    # clicking it is just as much an explicit go-ahead as clicking Resume
+    set_paused("autofetch", False)
     job_id = start_batch_job()
     return jsonify({"job_id": job_id}), 202
 
@@ -2078,6 +2113,7 @@ def api_names_auto_fetch_stop():
     job = JOBS.get(job_id) if job_id else None
     if not job or job["status"] != "running":
         return jsonify({"error": "No auto-fetch batch is currently running."}), 400
+    set_paused("autofetch", True)
     job["stop_event"].set()
     job["message"] = "Stopping — finishing the current movie first…"
     return jsonify({"job_id": job_id}), 202
@@ -2090,6 +2126,7 @@ def api_names_auto_fetch_resume():
     if not any(n["processed"] != "yes" for n in read_names()):
         return jsonify({"error": "No unprocessed names in names.csv."}), 400
 
+    set_paused("autofetch", False)
     job_id = start_batch_job()
     return jsonify({"job_id": job_id}), 202
 
@@ -2097,8 +2134,8 @@ def api_names_auto_fetch_resume():
 def start_video_gen_job():
     """Same self-starting pattern as start_batch_job(): launch/reuse the
     single in-flight Auto Generate job, or return None if nothing's
-    pending / already running."""
-    if not TMDB_API_KEY:
+    pending / already running / explicitly paused."""
+    if not TMDB_API_KEY or is_paused("autogen"):
         return None
     current = JOBS.get(CURRENT_VIDEO_GEN_JOB_ID["id"]) if CURRENT_VIDEO_GEN_JOB_ID["id"] else None
     if current and current["status"] == "running":
@@ -2124,6 +2161,7 @@ def api_auto_generate_videos():
     if not pending:
         return jsonify({"error": "No fetched names are pending video generation."}), 400
 
+    set_paused("autogen", False)
     job_id = start_video_gen_job()
     return jsonify({"job_id": job_id}), 202
 
@@ -2134,6 +2172,7 @@ def api_auto_generate_videos_stop():
     job = JOBS.get(job_id) if job_id else None
     if not job or job["status"] != "running":
         return jsonify({"error": "No video generation batch is currently running."}), 400
+    set_paused("autogen", True)
     job["stop_event"].set()
     job["message"] = "Stopping — finishing the current video first…"
     return jsonify({"job_id": job_id}), 202
@@ -2146,6 +2185,7 @@ def api_auto_generate_videos_resume():
     if not any(n["processed"] == "yes" and n["videos_generated"] != "yes" for n in read_names()):
         return jsonify({"error": "No fetched names are pending video generation."}), 400
 
+    set_paused("autogen", False)
     job_id = start_video_gen_job()
     return jsonify({"job_id": job_id}), 202
 
@@ -2153,7 +2193,9 @@ def api_auto_generate_videos_resume():
 def start_data_pull_job():
     """Same self-starting pattern as the other two batch jobs. Doesn't
     require TMDB_API_KEY (Wikipedia needs no key), only that there's at
-    least one name with data still pending."""
+    least one name with data still pending and it isn't explicitly paused."""
+    if is_paused("pulldata"):
+        return None
     current = JOBS.get(CURRENT_DATA_PULL_JOB_ID["id"]) if CURRENT_DATA_PULL_JOB_ID["id"] else None
     if current and current["status"] == "running":
         return CURRENT_DATA_PULL_JOB_ID["id"]
@@ -2174,6 +2216,7 @@ def start_data_pull_job():
 def api_pull_movie_data():
     if not any(n["data_filled"] != "yes" for n in read_names()):
         return jsonify({"error": "No names are pending data pull."}), 400
+    set_paused("pulldata", False)
     job_id = start_data_pull_job()
     return jsonify({"job_id": job_id}), 202
 
@@ -2184,6 +2227,7 @@ def api_pull_movie_data_stop():
     job = JOBS.get(job_id) if job_id else None
     if not job or job["status"] != "running":
         return jsonify({"error": "No data pull batch is currently running."}), 400
+    set_paused("pulldata", True)
     job["stop_event"].set()
     job["message"] = "Stopping — finishing the current movie first…"
     return jsonify({"job_id": job_id}), 202
@@ -2193,6 +2237,7 @@ def api_pull_movie_data_stop():
 def api_pull_movie_data_resume():
     if not any(n["data_filled"] != "yes" for n in read_names()):
         return jsonify({"error": "No names are pending data pull."}), 400
+    set_paused("pulldata", False)
     job_id = start_data_pull_job()
     return jsonify({"job_id": job_id}), 202
 

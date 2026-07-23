@@ -12,6 +12,7 @@ projects/*
 # Auto-fetch batch output/state (generated/local content)
 Movie DB/
 names.csv
+.batch_pause_state.json
 
 # Runtime-generated local config (auto-seeded with defaults on first run)
 categories.json
