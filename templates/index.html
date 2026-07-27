@@ -96,11 +96,10 @@
       </summary>
       <div class="collapsible-body">
         <p class="lede-sm">TMDb often has no Budget/Box office figures for Indian regional films.
-          This looks each movie up on Wikipedia instead and fills in only the blank cells in
-          Movie DB/&lt;name&gt;/Data/data.csv — anything TMDb already filled in is left alone.
-          Budget is formatted Indian-style (₹10 Cr / ₹90 Lakhs). When no number is on the page at
-          all, Box office status falls back to a best-guess from words in the article itself
-          (e.g. "blockbuster", "flop") — never a fabricated number.</p>
+          This looks each movie up via Gemini (when GEMINI_API_KEY is configured, falling back to
+          Wikipedia otherwise) and fills in only the blank cells in Movie DB/&lt;name&gt;/Data/data.csv
+          — anything TMDb already filled in is left alone. Budget is formatted Indian-style
+          (₹10 Cr / ₹90 Lakhs).</p>
 
         <div class="field-row" style="margin-top:8px">
           <button id="btn-run-pulldata" class="btn btn-primary btn-fetch-items">Pull data</button>

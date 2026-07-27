@@ -43,6 +43,7 @@ import csv
 import glob
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -171,14 +172,28 @@ DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3"
 
 # Auto Generate: turns each Movie DB/<actor> folder into a real project
 # (Assets/Data copied over, actor portrait fetched fresh) and renders a
-# fixed set of 7 videos from it — one desktop cut of the full filmography,
-# and six mobile cuts (full + one per box-office category).
+# desktop cut of the full filmography plus one mobile cut per box-office
+# category grouping (see group_categories) from it, each with a fixed end
+# video appended and a randomized looped music bed.
 AUTO_GENERATE_BATCH_SIZE = 5
-DESKTOP_VIDEO_SECONDS = 600  # 10 min
-MOBILE_VIDEO_SECONDS = 60
+DESKTOP_VIDEO_SECONDS = 600  # 10 min pacing target (see natural_desktop_seconds)
+MOBILE_MAIN_SECONDS = 57  # + end video makes up the rest of the ~60s target
 MOBILE_FULL_MAX_ITEMS = 24  # "last 24 movies" for the full mobile cut
 DESKTOP_SPEED_MULTIPLIER = 2.0  # scroll covers the strip twice as fast
 VIDEO_CATEGORIES = ["FLOP", "AVERAGE", "HIT", "SUPER HIT", "BLOCKBUSTER"]
+MIN_MOVIES_PER_SHORT = 10  # categories below this get combined with others, largest-first
+
+MUSIC_DIR = os.path.join(BASE_DIR, "Music")
+DESKTOP_END_VIDEO = os.path.join(BASE_DIR, "Desktop End video.mp4")
+MOBILE_END_VIDEO = os.path.join(BASE_DIR, "Mobile End video.mp4")
+XFADE_SECONDS = 1.0  # how long the end video takes to slide across and settle in
+# Windows' Movies & TV app is unusually strict — an mp4 ffmpeg produces
+# without +faststart (index at the end, the default) plays fine in
+# VLC/most players but Movies & TV can refuse it outright with a generic
+# "unsupported encoding settings" error. Explicit -pix_fmt yuv420p on the
+# output (not just inside a filter) avoids the encoder picking a 10-bit or
+# 4:2:2 pixel format from a filter chain, another thing that trips it up.
+FASTSTART_ARGS = ["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
 
 # Pull Data: TMDb frequently has no budget/revenue for Indian regional
 # films, leaving Budget/Box office status blank in Movie DB data.csv.
@@ -195,6 +210,16 @@ WIKI_API = "https://en.wikipedia.org/w/api.php"
 # their etiquette policy requires one, this isn't optional.
 WIKI_HEADERS = {"User-Agent": "Reelframe/1.0 (local video-generator tool, non-commercial)"}
 INR_PER_USD = 83.0  # approximate, only used when a budget/gross is stated in USD
+
+# Gemini (Google AI) — used as the primary Pull Data source when configured:
+# a single prompt asks the model directly for a movie's budget and box
+# office verdict, which covers many regional-film gaps Wikipedia's infobox
+# also leaves blank. Falls back to wikipedia_lookup_budget_status when no
+# key is set or a lookup comes back empty. Key lives only in .env.local
+# (gitignored), same as TMDB_API_KEY.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL = "gemini-flash-latest"
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 SUBFOLDERS = ["Assets", "Thumbnail", "Data", "Export", "Narration"]
 
@@ -808,11 +833,22 @@ def build_scroll_strip(objects, width, height, gap, cards_per_screen=CARDS_PER_S
     them into one wide image ready to be panned across. Packing several
     cards per screen instead of one keeps the total strip width — and so
     the per-frame crop/encode cost — roughly cards_per_screen times
-    smaller for the same item count."""
+    smaller for the same item count.
+
+    When len(objects) isn't a multiple of cards_per_screen, the last
+    screen has fewer cards than the others — it's given only as much
+    width as its actual card count needs (cards_in_screen * col_w), not a
+    full `width`-wide slot. Reserving the full width there left a solid
+    black gap for the unused slots, visible right as the pan reaches the
+    end of the strip."""
     col_w = max(1, width // cards_per_screen)
     n_screens = -(-len(objects) // cards_per_screen)  # ceil
-    strip_w = n_screens * width + (n_screens - 1) * gap
-    strip = Image.new("RGB", (strip_w, height), "#000000")  # matches the in-screen divider color
+    last_screen_count = len(objects) - (n_screens - 1) * cards_per_screen if n_screens else 0
+    last_screen_w = last_screen_count * col_w
+
+    full_screens = n_screens - 1 if n_screens else 0
+    strip_w = full_screens * width + last_screen_w + (n_screens - 1) * gap if n_screens else 0
+    strip = Image.new("RGB", (max(1, strip_w), height), "#000000")  # matches the in-screen divider color
 
     divider_w = max(2, int(col_w * 0.006))
     strip_draw = ImageDraw.Draw(strip)
@@ -820,6 +856,7 @@ def build_scroll_strip(objects, width, height, gap, cards_per_screen=CARDS_PER_S
     x = 0
     for screen_idx in range(n_screens):
         group = objects[screen_idx * cards_per_screen: (screen_idx + 1) * cards_per_screen]
+        screen_w = width if screen_idx < n_screens - 1 else last_screen_w
         cx = x
         for i, (num, img_path, columns) in enumerate(group):
             card_index = screen_idx * cards_per_screen + i
@@ -828,7 +865,7 @@ def build_scroll_strip(objects, width, height, gap, cards_per_screen=CARDS_PER_S
             if i > 0:
                 strip_draw.rectangle([cx - divider_w, 0, cx, height], fill="#000000")
             cx += col_w
-        x += width + gap
+        x += screen_w + gap
 
     return strip, strip_w
 
@@ -930,8 +967,8 @@ def render_scroll_video(strip_path, width, height, total_seconds, out_path, acto
                 # True) gives up on the whole directory if even one file
                 # in it won't delete yet) and leave a multi-MB orphan.
                 time.sleep(0.3)
-    os.remove(stderr_path) if os.path.isfile(stderr_path) and not stopped else None
     if stopped:
+        os.remove(stderr_path) if os.path.isfile(stderr_path) else None
         raise BatchStopped()
     if proc.returncode != 0:
         with open(stderr_path, "rb") as f:
@@ -1407,6 +1444,66 @@ def wikipedia_lookup_budget_status(movie_name, year):
     return budget_str, status
 
 
+GEMINI_VALID_STATUSES = {"FLOP", "AVERAGE", "HIT", "SUPER HIT", "BLOCKBUSTER"}
+
+
+def gemini_lookup_budget_status(movie_name, year):
+    """Ask Gemini directly for a movie's production budget and box office
+    verdict. Returns (budget_str_or_None, status_or_None), same contract as
+    wikipedia_lookup_budget_status. The prompt requires strict JSON with
+    explicit "unknown" values so the model reports gaps instead of
+    fabricating a plausible-looking number — only fields it actually
+    returns a number/known verdict for are used. Never raises for "model
+    doesn't know" — only for actual network/API failures, which the
+    caller's retry logic handles the same as any other job step."""
+    if not GEMINI_API_KEY:
+        return None, None
+
+    prompt = (
+        f"For the film \"{movie_name}\" ({year}), give me its production budget "
+        "in Indian Rupees and its box office verdict.\n"
+        "Respond with ONLY a compact JSON object, no markdown, no explanation:\n"
+        '{"budget_crore": <number in INR crore, or null if unknown>, '
+        '"verdict": <one of "FLOP", "AVERAGE", "HIT", "SUPER HIT", "BLOCKBUSTER", or null if unknown>}\n'
+        "Only give a value if you are reasonably confident it is factually correct for this "
+        "specific film and year — use null rather than guessing."
+    )
+
+    resp = request_with_retries(
+        "POST", f"{GEMINI_API_BASE}/{GEMINI_MODEL}:generateContent",
+        timeout=30,
+        params={"key": GEMINI_API_KEY},
+        json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
+        },
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    candidates = data.get("candidates") or []
+    if not candidates:
+        return None, None
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    text = "".join(p.get("text", "") for p in parts).strip()
+    if not text:
+        return None, None
+
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return None, None
+
+    budget_crore = parsed.get("budget_crore")
+    budget_str = None
+    if isinstance(budget_crore, (int, float)) and budget_crore > 0:
+        budget_str = format_inr_crore(float(budget_crore))
+
+    verdict = parsed.get("verdict")
+    status = verdict if verdict in GEMINI_VALID_STATUSES else None
+
+    return budget_str, status
+
+
 def run_auto_fetch_movie_job(job_id, title, topic, max_movies=HARD_MAX_AUTO_FETCH_MOVIES, auto_retry=0):
     """Given an actor's name, pull their full filmography from TMDb —
     title, release year, poster, and a computed budget-vs-revenue verdict
@@ -1690,6 +1787,173 @@ def render_object_set(objects, width, height, total_seconds, out_path, actor_pho
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def natural_desktop_seconds(has_actor_photo):
+    """render_scroll_video's speed formula makes the pan finish at exactly
+    scroll_seconds / speed_multiplier regardless of content length (the
+    strip width cancels out of the math) — so asking for the full
+    DESKTOP_VIDEO_SECONDS (600s) at the real DESKTOP_SPEED_MULTIPLIER (2x)
+    means the pan actually completes around the halfway point and the
+    remaining time was a frozen last frame before anything else could cut
+    in. This returns the true completion length instead (call
+    render_object_set with speed_multiplier=1.0 and this duration — the 2x
+    pace is already baked into the shorter number), so there's no freeze."""
+    intro_seconds = min(INTRO_SECONDS, DESKTOP_VIDEO_SECONDS * 0.5) if has_actor_photo else 0
+    scroll_budget = DESKTOP_VIDEO_SECONDS - intro_seconds
+    return intro_seconds + scroll_budget / DESKTOP_SPEED_MULTIPLIER
+
+
+def pick_random_music_track():
+    tracks = [os.path.join(MUSIC_DIR, f) for f in os.listdir(MUSIC_DIR) if f.lower().endswith(".mp3")] \
+        if os.path.isdir(MUSIC_DIR) else []
+    return random.choice(tracks) if tracks else None
+
+
+def add_looped_music(silent_video_path, total_seconds, out_path):
+    """Pick one random track from Music/, loop it to cover total_seconds
+    (same -stream_loop -1 + -t trick mux_narration already uses for
+    narration), and mux it in as the video's only audio track. Returns the
+    chosen track's filename, or None if Music/ has no .mp3 files (video
+    keeps no audio rather than failing the whole render)."""
+    track = pick_random_music_track()
+    if not track:
+        shutil.copy2(silent_video_path, out_path)
+        return None
+    cmd = [
+        FFMPEG_BIN, "-y",
+        "-i", silent_video_path,
+        "-stream_loop", "-1", "-i", track,
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", "copy", "-c:a", "aac",
+        *FASTSTART_ARGS,
+        "-t", str(total_seconds),
+        out_path,
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return os.path.basename(track)
+
+
+def append_end_video_silent(main_silent_path, end_video_path, out_path, width, height):
+    """Slide end_video_path's VIDEO ONLY in from the right over the last
+    XFADE_SECONDS of main_silent_path (ffmpeg's xfade "slideleft"
+    transition) instead of a hard cut — the end video travels in and
+    settles rather than jump-cutting. end_video_path's own embedded audio
+    track is deliberately dropped: keeping it meant a hard switch from the
+    main video's background music to a completely different track right at
+    the cut. One continuous looped music bed is muxed in afterward (by
+    add_looped_music) over the whole combined duration instead, so there's
+    no audio seam at all.
+
+    Re-encodes the whole main_silent_path through the xfade rather than
+    stream-copying most of it and concatenating — a stream-copy + concat
+    demuxer version was tried (only re-encoding a few seconds around the
+    transition) and did cut render time roughly in half, but the
+    concat-demuxer join between two separately-encoded segments produced
+    files Windows' Movies & TV app refused to open ("unsupported encoding
+    settings") even with the same +faststart/pix_fmt fix that resolved it
+    the first time. Compatibility over speed here."""
+    if not os.path.isfile(end_video_path):
+        shutil.copy2(main_silent_path, out_path)
+        return
+    main_duration = ffprobe_duration(main_silent_path)
+    offset = max(0.0, main_duration - XFADE_SECONDS)
+    cmd = [
+        FFMPEG_BIN, "-y",
+        "-i", main_silent_path,
+        "-i", end_video_path,
+        "-filter_complex",
+        f"[0:v]fps={FPS}[v0];"
+        f"[1:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={FPS}[v1];"
+        f"[v0][v1]xfade=transition=slideleft:duration={XFADE_SECONDS}:offset={offset}[outv]",
+        "-map", "[outv]",
+        "-c:v", "libx264", "-preset", "veryfast",
+        *FASTSTART_ARGS,
+        out_path,
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
+def ffprobe_duration(path):
+    """Probe a media file's duration in seconds via ffprobe (assumed to
+    live alongside FFMPEG_BIN, same convention resolve_ffmpeg() relies
+    on)."""
+    ffprobe_bin = os.path.join(os.path.dirname(FFMPEG_BIN), "ffprobe.exe")
+    if not os.path.isfile(ffprobe_bin):
+        ffprobe_bin = "ffprobe"
+    out = subprocess.run(
+        [ffprobe_bin, "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", path],
+        capture_output=True, text=True, check=True,
+    )
+    return float(out.stdout.strip())
+
+
+def group_categories(counts):
+    """counts: {CATEGORY: n}. Categories with n >= MIN_MOVIES_PER_SHORT
+    each get their own short. The rest are sorted largest-first and
+    greedily packed into groups that reach >= MIN_MOVIES_PER_SHORT so no
+    short ends up too thin to be worth watching; the final group is kept
+    even if it falls short of that (nothing left to add to it). Returns a
+    list of category-name lists, e.g. [["HIT"], ["FLOP"], ["AVERAGE"],
+    ["BLOCKBUSTER", "SUPER HIT"]] — solo categories first (input order),
+    combined groups after."""
+    solo = [c for c in VIDEO_CATEGORIES if counts.get(c, 0) >= MIN_MOVIES_PER_SHORT]
+    leftover = sorted(
+        ((c, counts.get(c, 0)) for c in VIDEO_CATEGORIES if 0 < counts.get(c, 0) < MIN_MOVIES_PER_SHORT),
+        key=lambda x: -x[1],
+    )
+
+    groups = [[c] for c in solo]
+    bin_cats, bin_total = [], 0
+    for cat, n in leftover:
+        bin_cats.append(cat)
+        bin_total += n
+        if bin_total >= MIN_MOVIES_PER_SHORT:
+            groups.append(bin_cats)
+            bin_cats, bin_total = [], 0
+    if bin_cats:
+        groups.append(bin_cats)
+
+    return groups
+
+
+def render_full_video_with_extras(objects, width, height, main_seconds, speed_multiplier,
+                                   end_video_path, out_path, actor_photo_path, stop_event=None):
+    """The complete per-video pipeline used by generate_actor_video_set:
+    silent scroll -> end video slid in -> continuous looped music over the
+    whole thing -> atomic move into place. Mirrors render_object_set's
+    tmp-dir-then-replace pattern so a video is never left half-written at
+    out_path."""
+    if not objects:
+        raise RuntimeError("No movies to render for this set.")
+    tmp_dir = out_path + "_tmp"
+    os.makedirs(tmp_dir, exist_ok=True)
+    try:
+        gap = max(2, int((width // CARDS_PER_SCREEN) * 0.006))
+        strip, _ = build_scroll_strip(objects, width, height, gap)
+        strip_path = os.path.join(tmp_dir, "strip.png")
+        strip.save(strip_path)
+
+        silent_path = os.path.join(tmp_dir, "silent.mp4")
+        render_scroll_video(strip_path, width, height, main_seconds, silent_path, actor_photo_path, speed_multiplier, stop_event)
+
+        if stop_event is not None and stop_event.is_set():
+            raise BatchStopped()
+
+        combined_silent_path = os.path.join(tmp_dir, "combined_silent.mp4")
+        append_end_video_silent(silent_path, end_video_path, combined_silent_path, width, height)
+        total_seconds = ffprobe_duration(combined_silent_path)
+
+        tmp_out_path = os.path.join(tmp_dir, os.path.basename(out_path))
+        add_looped_music(combined_silent_path, total_seconds, tmp_out_path)
+        os.replace(tmp_out_path, out_path)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        if os.path.isdir(tmp_dir):
+            time.sleep(0.5)  # one retry — see the matching comment in render_scroll_video
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def fetch_and_save_actor_photo(name, assets_dir):
     """Best-effort TMDb person-profile-photo fetch into Assets/_actor.jpg —
     same convention find_actor_photo()/the intro wipe already rely on.
@@ -1716,12 +1980,15 @@ class BatchStopped(Exception):
 
 def generate_actor_video_set(job, actor_name, progress_lo, progress_hi, stop_event=None):
     """Turn Movie DB/<actor_name> into a real project (same folder
-    convention as any other project) and render the 7-video set: one
-    desktop cut of the full filmography (10 min, 1080p, double scroll
-    speed) and six mobile cuts (60s each) — full (last 24 movies) plus one
-    per box-office category. A category with zero matching movies is
-    skipped, not failed, since older Movie DB fetches predate the
-    Super Hit tier and won't have one."""
+    convention as any other project) and render the full video set: one
+    desktop cut of the full filmography (natural-length 2x-speed scroll,
+    1080p) plus one mobile cut per box-office category grouping (see
+    group_categories — categories with >=10 movies get their own short,
+    smaller ones combine with others, largest-first, until each short has
+    at least 10 movies) plus the "full" mobile cut (last 24 movies). Every
+    video gets the matching end video (Desktop End video.mp4 /
+    Mobile End video.mp4) slid in at the end and a random looped track
+    from Music/ as its background music."""
     def check_stop():
         if stop_event is not None and stop_event.is_set():
             raise BatchStopped()
@@ -1781,7 +2048,14 @@ def generate_actor_video_set(job, actor_name, progress_lo, progress_hi, stop_eve
     dest_images = dict(numbered_images(dest_assets_dir))
     objects_all = [(num, dest_images[num], cols) for num, _src, cols in full_objects if num in dest_images]
 
-    total_steps = 1 + 1 + len(VIDEO_CATEGORIES)  # desktop + mobile-full + categories
+    counts = {}
+    for _num, _img, cols in objects_all:
+        status = cols[2].strip().upper()
+        if status:
+            counts[status] = counts.get(status, 0) + 1
+    category_groups = group_categories(counts)  # e.g. [["HIT"], ["FLOP"], ["BLOCKBUSTER", "SUPER HIT"]]
+
+    total_steps = 1 + 1 + len(category_groups)  # desktop + mobile-full + category shorts
     step = 0
 
     def next_frac():
@@ -1790,35 +2064,36 @@ def generate_actor_video_set(job, actor_name, progress_lo, progress_hi, stop_eve
         return step / total_steps
 
     check_stop()
-    report(next_frac(), "Rendering desktop video (10 min, 1080p, 2x scroll speed)")
+    desktop_seconds = natural_desktop_seconds(bool(actor_photo_path))
+    report(next_frac(), f"Rendering desktop video ({desktop_seconds:.0f}s scroll, 1080p, 2x scroll speed, + end video)")
     w, h = RESOLUTIONS_DESKTOP["1080p"]
-    render_object_set(
-        objects_all, w, h, DESKTOP_VIDEO_SECONDS,
+    render_full_video_with_extras(
+        objects_all, w, h, desktop_seconds, 1.0, DESKTOP_END_VIDEO,
         os.path.join(dest_export_dir, f"{actor_name} Desktop.mp4"),
-        actor_photo_path, speed_multiplier=DESKTOP_SPEED_MULTIPLIER, stop_event=stop_event,
+        actor_photo_path, stop_event=stop_event,
     )
 
     check_stop()
     report(next_frac(), "Rendering mobile video (full, last 24 movies)")
     mobile_w, mobile_h = RESOLUTION_MOBILE
     mobile_full_objects = objects_all[-MOBILE_FULL_MAX_ITEMS:] if len(objects_all) > MOBILE_FULL_MAX_ITEMS else objects_all
-    render_object_set(
-        mobile_full_objects, mobile_w, mobile_h, MOBILE_VIDEO_SECONDS,
+    render_full_video_with_extras(
+        mobile_full_objects, mobile_w, mobile_h, MOBILE_MAIN_SECONDS, 1.0, MOBILE_END_VIDEO,
         os.path.join(dest_export_dir, f"{actor_name} Mobile Full.mp4"),
         actor_photo_path, stop_event=stop_event,
     )
 
-    for category in VIDEO_CATEGORIES:
+    for group in category_groups:
         check_stop()
-        label = category.title()
+        label = " + ".join(c.title() for c in group)
         frac = next_frac()
-        cat_objects = [o for o in objects_all if o[2][2].strip().upper() == category]
+        cat_objects = [o for o in objects_all if o[2][2].strip().upper() in group]
         if not cat_objects:
             report(frac, f"No {label} movies found — skipping that category video")
             continue
         report(frac, f"Rendering mobile video ({label}, {len(cat_objects)} movie(s))")
-        render_object_set(
-            cat_objects, mobile_w, mobile_h, MOBILE_VIDEO_SECONDS,
+        render_full_video_with_extras(
+            cat_objects, mobile_w, mobile_h, MOBILE_MAIN_SECONDS, 1.0, MOBILE_END_VIDEO,
             os.path.join(dest_export_dir, f"{actor_name} Mobile {label}.mp4"),
             actor_photo_path, stop_event=stop_event,
         )
@@ -1959,10 +2234,16 @@ def run_pull_movie_data_job(job_id, auto_retry=0):
                     continue
 
                 job["progress"] = int((idx + i / max(1, len(movie_rows))) / total * 100)
-                job["message"] = f"[{idx + 1}/{total}] {name}: looking up \"{movie_name}\" ({year}) on Wikipedia"
+                source = "Gemini" if GEMINI_API_KEY else "Wikipedia"
+                job["message"] = f"[{idx + 1}/{total}] {name}: looking up \"{movie_name}\" ({year}) on {source}"
 
                 try:
-                    new_budget, new_status = wikipedia_lookup_budget_status(movie_name, year)
+                    new_budget, new_status = (None, None)
+                    if GEMINI_API_KEY:
+                        new_budget, new_status = gemini_lookup_budget_status(movie_name, year)
+                    if not new_budget and not new_status:
+                        # no key, or Gemini came back empty — Wikipedia infobox as a fallback
+                        new_budget, new_status = wikipedia_lookup_budget_status(movie_name, year)
                 except Exception as e:
                     # one bad/rate-limited movie shouldn't sink everything
                     # already found for this actor — skip it, keep going,
@@ -1972,7 +2253,7 @@ def run_pull_movie_data_job(job_id, auto_retry=0):
                     time.sleep(2.0)
                     continue
                 finally:
-                    time.sleep(0.5)  # be a polite, slow client to Wikipedia's API
+                    time.sleep(0.5)  # be a polite, slow client to Wikipedia/Gemini APIs
 
                 changed = False
                 if needs_budget and new_budget:
