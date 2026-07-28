@@ -176,7 +176,6 @@ DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3"
 # category grouping (see group_categories) from it, each with a fixed end
 # video appended and a randomized looped music bed.
 AUTO_GENERATE_BATCH_SIZE = 5
-DESKTOP_VIDEO_SECONDS = 600  # 10 min pacing target (see natural_desktop_seconds)
 MOBILE_MAIN_SECONDS = 57  # + end video makes up the rest of the ~60s target
 MOBILE_FULL_MAX_ITEMS = 24  # "last 24 movies" for the full mobile cut
 DESKTOP_SPEED_MULTIPLIER = 2.0  # scroll covers the strip twice as fast
@@ -848,6 +847,14 @@ def build_scroll_strip(objects, width, height, gap, cards_per_screen=CARDS_PER_S
 
     full_screens = n_screens - 1 if n_screens else 0
     strip_w = full_screens * width + last_screen_w + (n_screens - 1) * gap if n_screens else 0
+    # a strip narrower than `width` itself (a filmography with fewer than
+    # cards_per_screen movies total, e.g. 1-2 movies — no preceding full
+    # screens to crop against) can't be cropped down: render_scroll_video
+    # pans a `width`-wide window across the strip, and a narrower-than-window
+    # strip made that window run out of pixels (numpy broadcast error).
+    # Floor it at `width` — the leftover space stays black, same as before
+    # this crop fix existed, but only for this single-screen edge case.
+    strip_w = max(strip_w, width)
     strip = Image.new("RGB", (max(1, strip_w), height), "#000000")  # matches the in-screen divider color
 
     divider_w = max(2, int(col_w * 0.006))
@@ -1787,18 +1794,28 @@ def render_object_set(objects, width, height, total_seconds, out_path, actor_pho
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def natural_desktop_seconds(has_actor_photo):
+def desktop_target_seconds(movie_count):
+    """Longer filmographies get a longer desktop video instead of every
+    actor being squeezed into (or padded out to) the same fixed length.
+    Linear, calibrated to: 50 movies -> 7 min, 75 -> 10 min, 100 -> 13 min,
+    125 -> 16 min (+3 min per +25 movies), extended the same way below 50
+    rather than falling back to a flat default."""
+    return (0.12 * movie_count + 1) * 60
+
+
+def natural_desktop_seconds(has_actor_photo, movie_count):
     """render_scroll_video's speed formula makes the pan finish at exactly
     scroll_seconds / speed_multiplier regardless of content length (the
     strip width cancels out of the math) — so asking for the full
-    DESKTOP_VIDEO_SECONDS (600s) at the real DESKTOP_SPEED_MULTIPLIER (2x)
-    means the pan actually completes around the halfway point and the
+    desktop_target_seconds(movie_count) at the real DESKTOP_SPEED_MULTIPLIER
+    (2x) means the pan actually completes around the halfway point and the
     remaining time was a frozen last frame before anything else could cut
     in. This returns the true completion length instead (call
     render_object_set with speed_multiplier=1.0 and this duration — the 2x
     pace is already baked into the shorter number), so there's no freeze."""
-    intro_seconds = min(INTRO_SECONDS, DESKTOP_VIDEO_SECONDS * 0.5) if has_actor_photo else 0
-    scroll_budget = DESKTOP_VIDEO_SECONDS - intro_seconds
+    target = desktop_target_seconds(movie_count)
+    intro_seconds = min(INTRO_SECONDS, target * 0.5) if has_actor_photo else 0
+    scroll_budget = target - intro_seconds
     return intro_seconds + scroll_budget / DESKTOP_SPEED_MULTIPLIER
 
 
@@ -2064,7 +2081,7 @@ def generate_actor_video_set(job, actor_name, progress_lo, progress_hi, stop_eve
         return step / total_steps
 
     check_stop()
-    desktop_seconds = natural_desktop_seconds(bool(actor_photo_path))
+    desktop_seconds = natural_desktop_seconds(bool(actor_photo_path), len(objects_all))
     report(next_frac(), f"Rendering desktop video ({desktop_seconds:.0f}s scroll, 1080p, 2x scroll speed, + end video)")
     w, h = RESOLUTIONS_DESKTOP["1080p"]
     render_full_video_with_extras(
