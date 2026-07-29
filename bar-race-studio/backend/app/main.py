@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import uploads
+from app.api import renders, uploads
 
 app = FastAPI(title="Bar Race Studio API")
 
@@ -13,6 +13,7 @@ app.add_middleware(
 )
 
 app.include_router(uploads.router)
+app.include_router(renders.router)
 
 
 @app.get("/api/health")
