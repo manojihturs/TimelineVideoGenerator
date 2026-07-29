@@ -1,6 +1,7 @@
 import { useRaceConfig } from '../../../hooks/useRaceConfig'
 import type { ExportFormat, Resolution } from '../../../models/RaceConfig'
 import { Field, PanelSection, SelectInput, ToggleInput } from '../FormControls'
+import { ExportControls } from './ExportControls'
 
 const FORMAT_OPTIONS: { value: ExportFormat; label: string }[] = [
   { value: 'mp4', label: 'MP4' },
@@ -30,6 +31,7 @@ export function ExportPanel() {
         checked={config.transparent_background}
         onChange={(v) => updateConfig({ transparent_background: v })}
       />
+      <ExportControls />
     </PanelSection>
   )
 }
