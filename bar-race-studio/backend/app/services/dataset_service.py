@@ -6,7 +6,8 @@ from pathlib import Path
 import pandas as pd
 
 
-def load_dataframe(path: Path) -> pd.DataFrame:
+def load_dataframe(path: Path | str) -> pd.DataFrame:
+    path = Path(path)
     suffix = path.suffix.lower()
     if suffix == ".csv":
         return pd.read_csv(path)

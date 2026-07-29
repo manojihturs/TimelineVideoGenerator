@@ -1,12 +1,41 @@
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 
 from app.core import storage
 from app.models.config import RaceConfig
 from app.models.render_job import FramesResponse
+from app.services import job_manager
 from app.services.dataframe_builder import build_long_dataframe, compute_frame_rankings, interpolate_frames
 from app.services.dataset_service import load_dataframe
 
 router = APIRouter(prefix="/api/renders", tags=["renders"])
+
+
+@router.post("")
+def create_render(config: RaceConfig):
+    path = storage.resolve_upload_path(config.dataset_id)
+    if path is None:
+        raise HTTPException(404, "Dataset not found")
+    job_id = job_manager.start_render_job(config, str(path))
+    return {"job_id": job_id}
+
+
+@router.get("/{job_id}")
+def get_render_status(job_id: str):
+    job = job_manager.JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Render job not found")
+    return {"status": job["status"], "progress": job["progress"], "error": job["error"]}
+
+
+@router.get("/{job_id}/download")
+def download_render(job_id: str):
+    job = job_manager.JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Render job not found")
+    if job["status"] != job_manager.RenderStatus.DONE or not job["output_path"]:
+        raise HTTPException(409, f"Render is not finished (status: {job['status']})")
+    return FileResponse(job["output_path"])
 
 
 @router.post("/preview-frames", response_model=FramesResponse)
