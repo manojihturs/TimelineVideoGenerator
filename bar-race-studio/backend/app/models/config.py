@@ -52,6 +52,24 @@ class Resolution(str, Enum):
     VERTICAL_1080X1920 = "vertical_1080x1920"   # Shorts/Reels/TikTok
 
 
+class SocialPreset(str, Enum):
+    """Named shortcuts bundling resolution + orientation + a suggested
+    max duration for common short-form platforms — applying one just
+    sets the underlying fields below, it isn't a separate code path."""
+    NONE = "none"
+    YOUTUBE_SHORTS = "youtube_shorts"
+    TIKTOK = "tiktok"
+    INSTAGRAM_REELS = "instagram_reels"
+    YOUTUBE_LANDSCAPE = "youtube_landscape"
+
+
+class WatermarkPosition(str, Enum):
+    TOP_LEFT = "top_left"
+    TOP_RIGHT = "top_right"
+    BOTTOM_LEFT = "bottom_left"
+    BOTTOM_RIGHT = "bottom_right"
+
+
 class ColumnMapping(BaseModel):
     entity_column: str
     category_column: str | None = None
@@ -101,3 +119,12 @@ class RaceConfig(BaseModel):
     export_format: ExportFormat = ExportFormat.MP4
     resolution: Resolution = Resolution.HD_1080P
     transparent_background: bool = False
+    social_preset: SocialPreset = SocialPreset.NONE
+
+    watermark_asset_id: str | None = None
+    watermark_opacity: float = 0.7
+    watermark_position: WatermarkPosition = WatermarkPosition.BOTTOM_RIGHT
+    watermark_scale: float = 0.12  # watermark width as a fraction of frame width
+
+    music_asset_id: str | None = None
+    music_volume: float = 0.5  # 0-1, mixed under any narration/voiceover later

@@ -67,3 +67,24 @@ def encode_frames(
     ]
     subprocess.run(cmd, check=True, capture_output=True)
     return out_path
+
+
+def mix_background_music(video_path: str, music_path: str, volume: float, out_path: str) -> str:
+    """Loop music_path to cover video_path's full duration (ffmpeg's
+    -stream_loop -1 + -shortest, the same looping trick already proven
+    out for narration/background-music muxing in this repo's other
+    app.py) and mux it in as the video's audio track, scaled to the
+    configured volume."""
+    ffmpeg = resolve_ffmpeg()
+    subprocess.run([
+        ffmpeg, "-y",
+        "-i", video_path,
+        "-stream_loop", "-1", "-i", music_path,
+        "-filter_complex", f"[1:a]volume={volume}[music]",
+        "-map", "0:v:0", "-map", "[music]",
+        "-c:v", "copy", "-c:a", "aac",
+        "-shortest",
+        "-movflags", "+faststart",
+        out_path,
+    ], check=True, capture_output=True)
+    return out_path

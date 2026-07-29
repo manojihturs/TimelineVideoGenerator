@@ -11,10 +11,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.offsetbox import AnnotationBbox, OffsetImage
+from PIL import Image
 
-from app.models.config import ColorMode, Orientation, RaceConfig
+from app.models.config import ColorMode, Orientation, RaceConfig, WatermarkPosition
 from app.services.image_resolver import ImageResolver
 from app.services.value_formatting import format_value
+from app.api.assets import resolve_asset_path
 
 CATEGORY_PALETTE = [
     "#7C3AED", "#2563EB", "#059669", "#D97706", "#DC2626",
@@ -48,6 +50,37 @@ def _resolve_colors(ranked_df: pd.DataFrame, config: RaceConfig) -> dict[str, st
     }
 
 
+def _load_watermark(config: RaceConfig, frame_width_px: int) -> np.ndarray | None:
+    """Loaded once per render job, not once per frame. Returns an RGBA
+    numpy array scaled to config.watermark_scale of the frame width, or
+    None if no watermark is configured (or the asset can't be read)."""
+    if not config.watermark_asset_id:
+        return None
+    path = resolve_asset_path(config.watermark_asset_id)
+    if path is None:
+        return None
+    try:
+        img = Image.open(path).convert("RGBA")
+    except Exception:
+        return None
+    target_w = max(1, int(frame_width_px * config.watermark_scale))
+    scale = target_w / img.width
+    img = img.resize((target_w, max(1, int(img.height * scale))))
+    arr = np.asarray(img).astype(float)
+    arr[..., 3] *= config.watermark_opacity  # apply configured opacity to the alpha channel
+    return arr.astype(np.uint8)
+
+
+def _watermark_anchor(position: WatermarkPosition, fig_w: int, fig_h: int, wm_w: int, wm_h: int, margin: int = 16) -> tuple[int, int]:
+    if position == WatermarkPosition.TOP_LEFT:
+        return margin, fig_h - margin - wm_h
+    if position == WatermarkPosition.TOP_RIGHT:
+        return fig_w - margin - wm_w, fig_h - margin - wm_h
+    if position == WatermarkPosition.BOTTOM_LEFT:
+        return margin, margin
+    return fig_w - margin - wm_w, margin  # BOTTOM_RIGHT
+
+
 def _period_label(frame_index: float, value_columns: list[str]) -> str:
     lo = int(np.floor(frame_index))
     hi = min(lo + 1, len(value_columns) - 1)
@@ -75,6 +108,7 @@ def render_frames(
     colors = _resolve_colors(ranked_df, config)
     resolver = ImageResolver(size=64) if config.show_images else None
     max_value = ranked_df["value"].max() or 1
+    watermark = _load_watermark(config, width_px)
 
     frame_indices = sorted(ranked_df["frame_index"].unique())
     paths = []
@@ -165,6 +199,12 @@ def render_frames(
                       color="#6b7280", fontsize=config.label_size_px * 0.5)
 
         fig.tight_layout(rect=(0, 0.03, 1, 0.94))
+
+        if watermark is not None:
+            wm_h, wm_w = watermark.shape[0], watermark.shape[1]
+            x, y = _watermark_anchor(config.watermark_position, width_px, height_px, wm_w, wm_h)
+            fig.figimage(watermark, xo=x, yo=y, alpha=None, zorder=10)
+
         frame_path = os.path.join(output_dir, f"frame_{i:05d}.png")
         fig.savefig(frame_path, facecolor=config.background_color,
                     transparent=config.transparent_background)

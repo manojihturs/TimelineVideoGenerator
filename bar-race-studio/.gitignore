@@ -6,6 +6,9 @@ backend/storage/uploads/*
 !backend/storage/uploads/.gitkeep
 backend/storage/renders/*
 !backend/storage/renders/.gitkeep
+backend/storage/assets/*
+!backend/storage/assets/.gitkeep
+backend/storage/*.db
 backend/.venv/
 backend/venv/
 
