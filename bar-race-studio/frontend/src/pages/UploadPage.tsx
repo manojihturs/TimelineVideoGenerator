@@ -1,14 +1,10 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { DropzoneUpload } from '../components/upload/DropzoneUpload'
-import { DataPreviewTable } from '../components/preview/DataPreviewTable'
-import { ColumnMappingScreen } from '../components/mapping/ColumnMappingScreen'
-import { detectColumns, previewDataset, uploadDataset } from '../api/uploads'
-import type { DatasetPreview, DetectedColumns, UploadResponse } from '../models/DatasetSchema'
+import { uploadDataset } from '../api/uploads'
 
 export function UploadPage() {
-  const [upload, setUpload] = useState<UploadResponse | null>(null)
-  const [detected, setDetected] = useState<DetectedColumns | null>(null)
-  const [preview, setPreview] = useState<DatasetPreview | null>(null)
+  const navigate = useNavigate()
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
 
@@ -17,13 +13,7 @@ export function UploadPage() {
     setIsLoading(true)
     try {
       const uploaded = await uploadDataset(file)
-      setUpload(uploaded)
-      const [detectedColumns, previewData] = await Promise.all([
-        detectColumns(uploaded.dataset_id),
-        previewDataset(uploaded.dataset_id),
-      ])
-      setDetected(detectedColumns)
-      setPreview(previewData)
+      navigate(`/mapping/${uploaded.dataset_id}`)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Upload failed')
     } finally {
@@ -40,28 +30,8 @@ export function UploadPage() {
 
       <DropzoneUpload onFileSelected={handleFile} />
 
-      {isLoading && <p className="mt-4 text-sm text-gray-400">Analyzing dataset…</p>}
+      {isLoading && <p className="mt-4 text-sm text-gray-400">Uploading…</p>}
       {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
-
-      {upload && (
-        <p className="mt-6 text-sm text-gray-400">
-          <span className="font-medium text-gray-200">{upload.filename}</span> — {upload.row_count} rows,{' '}
-          {upload.columns.length} columns
-        </p>
-      )}
-
-      {detected && (
-        <div className="mt-4">
-          <ColumnMappingScreen columns={upload?.columns ?? []} detected={detected} />
-        </div>
-      )}
-
-      {preview && (
-        <div className="mt-6">
-          <h3 className="mb-2 text-sm font-semibold text-gray-300">Preview (first {preview.rows.length} rows)</h3>
-          <DataPreviewTable preview={preview} />
-        </div>
-      )}
     </div>
   )
 }
