@@ -9,6 +9,9 @@ export type ValueFormat = 'number' | 'currency' | 'percentage' | 'thousands' | '
 export type Interpolation = 'linear' | 'easeInOut' | 'easeIn' | 'easeOut'
 export type ExportFormat = 'mp4' | 'gif' | 'png_frames'
 export type Resolution = '1080p' | '1440p' | '4k' | 'vertical_1080x1920'
+export type SocialPreset = 'none' | 'youtube_shorts' | 'tiktok' | 'instagram_reels' | 'youtube_landscape'
+export type StylePreset = 'custom' | 'sports_light' | 'narrative_dark'
+export type WatermarkPosition = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right'
 
 export interface ColumnMapping {
   entity_column: string
@@ -59,6 +62,16 @@ export interface RaceConfig {
   export_format: ExportFormat
   resolution: Resolution
   transparent_background: boolean
+  social_preset: SocialPreset
+  style_preset: StylePreset
+
+  watermark_asset_id: string | null
+  watermark_opacity: number
+  watermark_position: WatermarkPosition
+  watermark_scale: number
+
+  music_asset_id: string | null
+  music_volume: number
 }
 
 export function createDefaultRaceConfig(mapping: ColumnMapping): RaceConfig {
@@ -95,5 +108,13 @@ export function createDefaultRaceConfig(mapping: ColumnMapping): RaceConfig {
     export_format: 'mp4',
     resolution: '1080p',
     transparent_background: false,
+    social_preset: 'none',
+    style_preset: 'custom',
+    watermark_asset_id: null,
+    watermark_opacity: 0.7,
+    watermark_position: 'bottom_right',
+    watermark_scale: 0.12,
+    music_asset_id: null,
+    music_volume: 0.5,
   }
 }
