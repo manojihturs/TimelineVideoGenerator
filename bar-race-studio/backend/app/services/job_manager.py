@@ -15,6 +15,7 @@ from app.services.dataframe_builder import build_long_dataframe, compute_frame_r
 from app.services.dataset_service import load_dataframe
 from app.services.race_renderer import render_frames
 from app.services.social_presets import apply_social_preset
+from app.services.style_presets import apply_style_preset
 from app.services.video_encoder import RESOLUTION_PIXELS, encode_frames, mix_background_music
 
 _EXPORT_EXTENSIONS = {
@@ -48,6 +49,7 @@ def _run_render_job(job_id: str, config: RaceConfig, dataset_path: str) -> None:
     tmp_frame_dir = os.path.join(RENDERS_DIR, f"_{job_id}_frames")
     try:
         config = apply_social_preset(config)
+        config = apply_style_preset(config)
 
         job["status"] = RenderStatus.RENDERING
         job["progress"] = 5

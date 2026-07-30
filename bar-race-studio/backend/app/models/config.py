@@ -52,6 +52,15 @@ class Resolution(str, Enum):
     VERTICAL_1080X1920 = "vertical_1080x1920"   # Shorts/Reels/TikTok
 
 
+class StylePreset(str, Enum):
+    """Applying one just overrides background/font/label-size fields
+    below (see style_presets.py) — not a separate rendering code path.
+    CUSTOM leaves whatever the user has already set alone."""
+    CUSTOM = "custom"
+    SPORTS_LIGHT = "sports_light"      # white background, compact labels — standings/leaderboard feel
+    NARRATIVE_DARK = "narrative_dark"  # dark background, large bold text — historical-timeline feel
+
+
 class SocialPreset(str, Enum):
     """Named shortcuts bundling resolution + orientation + a suggested
     max duration for common short-form platforms — applying one just
@@ -100,7 +109,7 @@ class RaceConfig(BaseModel):
     custom_color_map: dict[str, str] = {}
     bar_width_ratio: float = 0.8
 
-    background_color: str = "#0B0F14"
+    background_color: str = "#FFFFFF"
     font_family: str = "Inter"
     label_size_px: int = 16
 
@@ -120,6 +129,7 @@ class RaceConfig(BaseModel):
     resolution: Resolution = Resolution.HD_1080P
     transparent_background: bool = False
     social_preset: SocialPreset = SocialPreset.NONE
+    style_preset: StylePreset = StylePreset.CUSTOM
 
     watermark_asset_id: str | None = None
     watermark_opacity: float = 0.7

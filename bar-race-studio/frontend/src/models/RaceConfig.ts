@@ -79,7 +79,7 @@ export function createDefaultRaceConfig(mapping: ColumnMapping): RaceConfig {
     single_color: '#7C3AED',
     custom_color_map: {},
     bar_width_ratio: 0.8,
-    background_color: '#0B0F14',
+    background_color: '#FFFFFF',
     font_family: 'Inter',
     label_size_px: 16,
     show_images: true,

@@ -16,6 +16,21 @@ def create_render(config: RaceConfig):
     path = storage.resolve_upload_path(config.dataset_id)
     if path is None:
         raise HTTPException(404, "Dataset not found")
+
+    # A bare, uncontextualized replay of a dataset (no title, no source
+    # attribution) is exactly the kind of "reused content" YouTube's
+    # monetization policy is strictest about. Requiring both fields here
+    # doesn't guarantee monetization approval (that's YouTube's call on
+    # the actual upload) but it does stop the app from producing videos
+    # that fail the most basic bar for it.
+    if not config.title.strip() or not config.data_source_label.strip():
+        raise HTTPException(
+            400,
+            "Title and data source are required before exporting — YouTube's monetization "
+            "policy for reused/aggregated data content expects both real context and a "
+            "citation, not a bare chart replay.",
+        )
+
     job_id = job_manager.start_render_job(config, str(path))
     return {"job_id": job_id}
 
