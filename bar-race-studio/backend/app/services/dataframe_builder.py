@@ -4,7 +4,23 @@ renderer needs — the one place that owns "what does frame N look like"."""
 import numpy as np
 import pandas as pd
 
-from app.models.config import ColumnMapping, SortDirection
+from app.models.config import ColumnMapping, Interpolation, SortDirection
+
+
+def _ease(t: float, interpolation: Interpolation) -> float:
+    """Remaps a linear 0-1 progress value into an eased curve — this is
+    what actually produces a "slow motion" feel: easeInOut starts and
+    ends each transition slowly and moves fastest through the middle,
+    rather than the constant, mechanical speed a plain linear
+    interpolation (t unchanged) produces."""
+    if interpolation == Interpolation.LINEAR:
+        return t
+    if interpolation == Interpolation.EASE_IN:
+        return t * t
+    if interpolation == Interpolation.EASE_OUT:
+        return 1 - (1 - t) * (1 - t)
+    # EASE_IN_OUT (default) — smoothstep
+    return t * t * (3 - 2 * t)
 
 
 def build_long_dataframe(df: pd.DataFrame, mapping: ColumnMapping) -> pd.DataFrame:
@@ -45,13 +61,20 @@ def build_long_dataframe(df: pd.DataFrame, mapping: ColumnMapping) -> pd.DataFra
     return long_df.sort_values(["period_index", "entity"]).reset_index(drop=True)
 
 
-def interpolate_frames(long_df: pd.DataFrame, steps_per_transition: int) -> pd.DataFrame:
-    """Insert `steps_per_transition` linearly-interpolated in-between
-    frames between every pair of consecutive periods, per entity — this
-    is what makes bars glide instead of jump. steps_per_transition=0
-    means no interpolation (one frame per period, a "snap" animation).
-    Returns columns: frame_index (float, period_index-aligned), entity,
-    category, image_url, value."""
+def interpolate_frames(
+    long_df: pd.DataFrame,
+    steps_per_transition: int,
+    interpolation: Interpolation = Interpolation.EASE_IN_OUT,
+) -> pd.DataFrame:
+    """Insert `steps_per_transition` interpolated in-between frames
+    between every pair of consecutive periods, per entity — this is what
+    makes bars glide instead of jump. `interpolation` shapes *how* they
+    glide (see _ease); frame_index itself always advances linearly with
+    step so playback timing stays even, only the interpolated value
+    follows the eased curve. steps_per_transition=0 means no
+    interpolation (one frame per period, a "snap" animation). Returns
+    columns: frame_index (float, period_index-aligned), entity, category,
+    image_url, value."""
     if long_df.empty:
         return long_df.assign(frame_index=pd.Series(dtype=float))
 
@@ -72,8 +95,9 @@ def interpolate_frames(long_df: pd.DataFrame, steps_per_transition: int) -> pd.D
                 v0, v1 = entity_values.get(p0, 0.0), entity_values.get(p1, 0.0)
                 for step in range(1, steps_per_transition + 1):
                     t = step / (steps_per_transition + 1)
-                    frame_index = p0 + t * (p1 - p0)
-                    value = v0 + t * (v1 - v0)
+                    eased_t = _ease(t, interpolation)
+                    frame_index = p0 + t * (p1 - p0)  # linear — controls playback timing, not motion feel
+                    value = v0 + eased_t * (v1 - v0)  # eased — controls how the bar actually glides
                     frame_rows.append((frame_index, entity_row.entity, entity_row.category, entity_row.image_url, value))
 
     result = pd.DataFrame(frame_rows, columns=["frame_index", "entity", "category", "image_url", "value"])

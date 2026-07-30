@@ -99,7 +99,7 @@ class RaceConfig(BaseModel):
 
     fps: int = 30
     animation_speed: float = 1.0
-    transition_duration_ms: int = 500
+    transition_duration_ms: int = 900  # slower/glidier default than a snappy 500ms
     interpolation: Interpolation = Interpolation.EASE_IN_OUT
 
     bar_count: int = 10

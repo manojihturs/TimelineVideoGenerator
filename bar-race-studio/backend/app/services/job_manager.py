@@ -56,8 +56,12 @@ def _run_render_job(job_id: str, config: RaceConfig, dataset_path: str) -> None:
 
         df = load_dataframe(dataset_path)
         long_df = build_long_dataframe(df, config.mapping)
-        steps = max(1, round(config.fps * (config.transition_duration_ms / 1000))) if config.smooth_animation else 0
-        interpolated = interpolate_frames(long_df, steps_per_transition=steps)
+        # animation_speed scales the transition duration inversely — a
+        # value below 1 stretches each transition out (slow motion), above
+        # 1 compresses it. This field previously wasn't wired to anything.
+        effective_transition_s = (config.transition_duration_ms / 1000) / max(0.01, config.animation_speed)
+        steps = max(1, round(config.fps * effective_transition_s)) if config.smooth_animation else 0
+        interpolated = interpolate_frames(long_df, steps_per_transition=steps, interpolation=config.interpolation)
         ranked = compute_frame_rankings(interpolated, config.bar_count, config.sort_direction)
         job["progress"] = 20
 

@@ -83,7 +83,7 @@ export function createDefaultRaceConfig(mapping: ColumnMapping): RaceConfig {
     data_source_label: '',
     fps: 30,
     animation_speed: 1,
-    transition_duration_ms: 500,
+    transition_duration_ms: 900,
     interpolation: 'easeInOut',
     bar_count: 10,
     sort_direction: 'descending',

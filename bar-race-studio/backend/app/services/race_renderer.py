@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.offsetbox import AnnotationBbox, OffsetImage
+from matplotlib.patches import Circle
 from PIL import Image
 
 from app.models.config import ColorMode, Orientation, RaceConfig, WatermarkPosition
@@ -25,6 +26,29 @@ DEFAULT_PALETTE = [
     "#2563EB", "#DC2626", "#059669", "#D97706", "#7C3AED",
     "#0891B2", "#DB2777", "#65A30D", "#EA580C", "#4F46E5",
 ]
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[float, float, float]:
+    h = hex_color.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+
+
+def _lighten(hex_color: str, amount: float) -> tuple[float, float, float]:
+    """Blends hex_color toward white by `amount` (0-1) — the second stop
+    of each bar's duotone gradient, derived from its own base color
+    rather than an unrelated second color, so the gradient still reads
+    as "one entity's bar" rather than two colors collided together."""
+    r, g, b = _hex_to_rgb(hex_color)
+    return r + (1 - r) * amount, g + (1 - g) * amount, b + (1 - b) * amount
+
+
+def _gradient_array(color_a: tuple[float, float, float], color_b: tuple[float, float, float], steps: int = 128) -> np.ndarray:
+    """An (steps, 1, 3) image array for imshow — a smooth left-to-right
+    (or bottom-to-top) blend between two colors, forming each bar's
+    multi-color fill."""
+    t = np.linspace(0, 1, steps).reshape(-1, 1)
+    a, b = np.array(color_a), np.array(color_b)
+    return (a[None, :] * (1 - t) + b[None, :] * t).reshape(steps, 1, 3)
 
 
 def _contrast_text_color(background_hex: str) -> tuple[str, str, str]:
@@ -163,56 +187,88 @@ def render_frames(
         tick_labels = [f"{int(r)}.  {lbl}" if config.show_rank else lbl
                        for r, lbl in zip(frame["rank"], labels)]
 
+        # extra tick-label padding when images are on, so the icon sitting
+        # just inside the bar's start doesn't overlap the entity name
+        # matplotlib renders just outside the axis in that same spot
+        label_pad = 10 + (config.label_size_px * 1.4 if config.show_images else 0)
+
         if config.orientation == Orientation.HORIZONTAL:
-            bars = ax.barh(positions, values, color=bar_colors, height=config.bar_width_ratio)
             ax.set_xlim(0, max_value + value_area)
+            ax.set_ylim(positions.min() - 0.6, positions.max() + 0.6)
             ax.set_yticks(positions)
             ax.set_yticklabels(tick_labels, color=text_color, fontsize=config.label_size_px * 0.6)
+            ax.tick_params(axis="y", pad=label_pad)
             ax.xaxis.set_ticks_position("top")  # matches the sports-standings style: scale reads top-down
             ax.xaxis.set_label_position("top")
         else:
-            bars = ax.bar(positions, values, color=bar_colors, width=config.bar_width_ratio)
             ax.set_ylim(0, max_value + value_area)
+            ax.set_xlim(positions.min() - 0.6, positions.max() + 0.6)
             ax.set_xticks(positions)
             ax.set_xticklabels(tick_labels, rotation=45, ha="right", color=text_color, fontsize=config.label_size_px * 0.6)
+            ax.tick_params(axis="x", pad=label_pad)
 
-        for bar, row in zip(bars, frame.itertuples(index=False)):
-            value_text_end = bar.get_width() if config.orientation == Orientation.HORIZONTAL else bar.get_height()
+        half = config.bar_width_ratio / 2
+
+        for pos, value, entity, category, image_url, base_color in zip(
+            positions, values, frame["entity"], frame["category"], frame["image_url"], bar_colors,
+        ):
+            if value <= 0:
+                continue
+
+            # rounded "pill" bar: a horizontal(/vertical) color-gradient
+            # fill clipped to the bar's rectangle, plus a filled circle
+            # at each end sized to the bar's own thickness — the circles
+            # are what make the ends read as rounded instead of square,
+            # without matplotlib's FancyBboxPatch rounding-size ambiguity
+            # (its units depend on the transform in a way that's easy to
+            # get subtly wrong against wildly different x/y data scales).
+            gradient_end = _lighten(base_color, 0.4)
+            if config.orientation == Orientation.HORIZONTAL:
+                gradient = _gradient_array(_hex_to_rgb(base_color), gradient_end)
+                ax.imshow(gradient, extent=(0, value, pos - half, pos + half),
+                          aspect="auto", zorder=2, interpolation="bilinear")
+                ax.add_patch(Circle((0, pos), half, color=base_color, zorder=2, linewidth=0))
+                ax.add_patch(Circle((value, pos), half, color=gradient_end, zorder=2, linewidth=0))
+            else:
+                gradient = _gradient_array(_hex_to_rgb(base_color), gradient_end).transpose(1, 0, 2)
+                ax.imshow(gradient, extent=(pos - half, pos + half, 0, value),
+                          aspect="auto", zorder=2, interpolation="bilinear")
+                ax.add_patch(Circle((pos, 0), half, color=base_color, zorder=2, linewidth=0))
+                ax.add_patch(Circle((pos, value), half, color=gradient_end, zorder=2, linewidth=0))
+
             if config.show_value:
-                # a fixed points offset (not a fraction of max_value) so
-                # the gap to the bar tip stays visually consistent
-                # regardless of the data's scale, and lines up with the
-                # image's own points-offset placement below instead of
-                # drifting into it
-                text = format_value(row.value, config.value_format, config.value_decimal_places)
+                # fixed points offset (not a fraction of max_value) so the
+                # gap to the bar tip stays visually consistent regardless
+                # of the data's scale
+                text = format_value(value, config.value_format, config.value_decimal_places)
                 if config.orientation == Orientation.HORIZONTAL:
-                    ax.annotate(text, (value_text_end, bar.get_y() + bar.get_height() / 2),
-                                xytext=(10, 0), textcoords="offset points",
+                    ax.annotate(text, (value, pos), xytext=(10, 0), textcoords="offset points",
                                 va="center", ha="left", color=text_color, fontsize=config.label_size_px * 0.6,
-                                fontweight="bold")
+                                fontweight="bold", zorder=4)
                 else:
-                    ax.annotate(text, (bar.get_x() + bar.get_width() / 2, value_text_end),
-                                xytext=(0, 10), textcoords="offset points",
+                    ax.annotate(text, (pos, value), xytext=(0, 10), textcoords="offset points",
                                 ha="center", va="bottom", color=text_color, fontsize=config.label_size_px * 0.6,
-                                fontweight="bold")
+                                fontweight="bold", zorder=4)
 
             if resolver is not None:
-                avatar = resolver.resolve(row.entity, row.image_url)
-                imagebox = OffsetImage(np.asarray(avatar), zoom=24 / avatar.width)
-                # placed further out than the value label (both anchored
-                # to the same bar-tip point, both offset in points so the
-                # gap between them stays fixed regardless of data scale)
-                # so it reads as "this bar's entity" the way a crest/logo
-                # sits at the end of a sports-standings race, without
-                # overlapping the value text
+                avatar = resolver.resolve(entity, image_url)
+                # inside the bar, near its start. OffsetImage's zoom is a
+                # points-space scale factor, NOT a data-coordinate size —
+                # deriving it from `half` (a data-space bar-thickness
+                # value, e.g. ~0.3-0.5) previously shrank the icon to a
+                # sliver of a pixel. A fixed point diameter, scaled by
+                # label_size_px like the rest of the chart's text, is
+                # what actually produces a visible, consistently-sized
+                # icon regardless of the data's value scale.
+                icon_diameter_pt = config.label_size_px * 1.8
+                imagebox = OffsetImage(np.asarray(avatar), zoom=icon_diameter_pt / avatar.width)
+                inset_offset = half * 1.15  # just past the rounded end-cap, inside the fill
                 if config.orientation == Orientation.HORIZONTAL:
-                    ab = AnnotationBbox(imagebox, (value_text_end, bar.get_y() + bar.get_height() / 2),
-                                         xybox=(50, 0), xycoords="data", boxcoords="offset points",
-                                         frameon=False, box_alignment=(0.5, 0.5))
+                    icon_x = min(inset_offset, max(value - inset_offset, inset_offset * 0.4))
+                    ab = AnnotationBbox(imagebox, (icon_x, pos), frameon=False, box_alignment=(0.5, 0.5), zorder=5)
                 else:
-                    ab = AnnotationBbox(imagebox, (bar.get_x() + bar.get_width() / 2, value_text_end),
-                                         xybox=(0, 50), xycoords="data", boxcoords="offset points",
-                                         frameon=False, box_alignment=(0.5, 0.5))
+                    icon_y = min(inset_offset, max(value - inset_offset, inset_offset * 0.4))
+                    ab = AnnotationBbox(imagebox, (pos, icon_y), frameon=False, box_alignment=(0.5, 0.5), zorder=5)
                 ax.add_artist(ab)
 
         if not config.show_axis:
