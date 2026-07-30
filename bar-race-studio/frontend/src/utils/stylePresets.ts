@@ -6,6 +6,7 @@ import type { RaceConfig, StylePreset } from '../models/RaceConfig'
 const STYLE_PRESET_FIELDS: Record<Exclude<StylePreset, 'custom'>, Pick<RaceConfig, 'background_color' | 'font_family' | 'label_size_px'>> = {
   sports_light: { background_color: '#FFFFFF', font_family: 'Inter', label_size_px: 16 },
   narrative_dark: { background_color: '#0F172A', font_family: 'Inter', label_size_px: 22 },
+  pastel_soft: { background_color: '#FAF7F2', font_family: 'Inter', label_size_px: 17 },
 }
 
 const SPORTS_LIGHT_PALETTE = [
@@ -18,6 +19,11 @@ const NARRATIVE_DARK_PALETTE = [
   '#FB923C', '#22D3EE', '#A3E635', '#F472B6', '#818CF8',
 ]
 
+const PASTEL_SOFT_PALETTE = [
+  '#8FB3E8', '#F2A6A6', '#9BD8B8', '#F5C77E', '#B79FE0',
+  '#F0A8C9', '#7FCFC7', '#E0B583', '#A8C7E0', '#D3A6D9',
+]
+
 const DEFAULT_PALETTE = [
   '#2563EB', '#DC2626', '#059669', '#D97706', '#7C3AED',
   '#0891B2', '#DB2777', '#65A30D', '#EA580C', '#4F46E5',
@@ -27,6 +33,7 @@ const STYLE_PRESET_PALETTES: Record<StylePreset, string[]> = {
   custom: DEFAULT_PALETTE,
   sports_light: SPORTS_LIGHT_PALETTE,
   narrative_dark: NARRATIVE_DARK_PALETTE,
+  pastel_soft: PASTEL_SOFT_PALETTE,
 }
 
 /** The config the preview should actually render with — style_preset

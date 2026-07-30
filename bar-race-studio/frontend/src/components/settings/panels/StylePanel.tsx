@@ -6,6 +6,7 @@ const STYLE_PRESET_OPTIONS: { value: StylePreset; label: string }[] = [
   { value: 'custom', label: 'Custom (use settings below)' },
   { value: 'sports_light', label: 'Sports Light — white background, compact standings feel' },
   { value: 'narrative_dark', label: 'Narrative Dark — bold oversized text, historical-timeline feel' },
+  { value: 'pastel_soft', label: 'Pastel Soft — muted palette, gentle data-story feel' },
 ]
 
 const SOCIAL_PRESET_OPTIONS: { value: SocialPreset; label: string }[] = [

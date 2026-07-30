@@ -17,9 +17,17 @@ NARRATIVE_DARK_PALETTE = [
     "#FB923C", "#22D3EE", "#A3E635", "#F472B6", "#818CF8",
 ]
 
+# soft/muted, not just SPORTS_LIGHT_PALETTE lightened — chosen from a
+# different hue set entirely so it reads as its own look
+PASTEL_SOFT_PALETTE = [
+    "#8FB3E8", "#F2A6A6", "#9BD8B8", "#F5C77E", "#B79FE0",
+    "#F0A8C9", "#7FCFC7", "#E0B583", "#A8C7E0", "#D3A6D9",
+]
+
 STYLE_PRESET_PALETTES: dict[StylePreset, list[str]] = {
     StylePreset.SPORTS_LIGHT: SPORTS_LIGHT_PALETTE,
     StylePreset.NARRATIVE_DARK: NARRATIVE_DARK_PALETTE,
+    StylePreset.PASTEL_SOFT: PASTEL_SOFT_PALETTE,
 }
 
 _STYLE_PRESET_FIELDS: dict[StylePreset, dict] = {
@@ -32,6 +40,11 @@ _STYLE_PRESET_FIELDS: dict[StylePreset, dict] = {
         "background_color": "#0F172A",
         "font_family": "Inter",
         "label_size_px": 22,  # oversized, readable-at-a-glance text for the historical-timeline feel
+    },
+    StylePreset.PASTEL_SOFT: {
+        "background_color": "#FAF7F2",  # warm off-white, softer than pure white
+        "font_family": "Inter",
+        "label_size_px": 17,
     },
 }
 

@@ -229,16 +229,21 @@ def render_frames(
 
         ax.tick_params(colors=secondary_text_color, labelsize=config.label_size_px * 0.55)
 
-        period_label = _period_label(frame_index, config.mapping.value_columns)
-        fig.suptitle(
-            f"{config.title}  :  {period_label}" if config.title else period_label,
-            color=text_color, fontsize=config.label_size_px * 1.2, fontweight="bold",
-        )
+        if config.title:
+            fig.suptitle(config.title, color=text_color, fontsize=config.label_size_px * 1.2, fontweight="bold")
         if config.subtitle:
             ax.set_title(config.subtitle, color=secondary_text_color, fontsize=config.label_size_px * 0.7, loc="left")
         if config.data_source_label:
             fig.text(0.99, 0.01, f"Source: {config.data_source_label}", ha="right", va="bottom",
                       color=secondary_text_color, fontsize=config.label_size_px * 0.5)
+
+        # large bottom-right period/year watermark, separate from the
+        # title — the "current point in time" reads at a glance the way
+        # a big stylized year label does in historical-timeline-style
+        # bar chart races, rather than being buried in the title text
+        period_label = _period_label(frame_index, config.mapping.value_columns)
+        fig.text(0.985, 0.06, period_label, ha="right", va="bottom",
+                  color=text_color, fontsize=config.label_size_px * 2.2, fontweight="bold", alpha=0.85)
 
         fig.tight_layout(rect=(0, 0.03, 1, 0.94))
 

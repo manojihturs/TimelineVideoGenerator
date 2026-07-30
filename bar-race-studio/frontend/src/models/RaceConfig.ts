@@ -10,7 +10,7 @@ export type Interpolation = 'linear' | 'easeInOut' | 'easeIn' | 'easeOut'
 export type ExportFormat = 'mp4' | 'gif' | 'png_frames'
 export type Resolution = '1080p' | '1440p' | '4k' | 'vertical_1080x1920'
 export type SocialPreset = 'none' | 'youtube_shorts' | 'tiktok' | 'instagram_reels' | 'youtube_landscape'
-export type StylePreset = 'custom' | 'sports_light' | 'narrative_dark'
+export type StylePreset = 'custom' | 'sports_light' | 'narrative_dark' | 'pastel_soft'
 export type WatermarkPosition = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right'
 
 export interface ColumnMapping {

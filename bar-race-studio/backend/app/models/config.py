@@ -59,6 +59,7 @@ class StylePreset(str, Enum):
     CUSTOM = "custom"
     SPORTS_LIGHT = "sports_light"      # white background, compact labels — standings/leaderboard feel
     NARRATIVE_DARK = "narrative_dark"  # dark background, large bold text — historical-timeline feel
+    PASTEL_SOFT = "pastel_soft"        # soft muted palette, light background — gentle data-story feel
 
 
 class SocialPreset(str, Enum):
