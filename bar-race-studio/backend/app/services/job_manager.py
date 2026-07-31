@@ -61,8 +61,11 @@ def _run_render_job(job_id: str, config: RaceConfig, dataset_path: str) -> None:
         # 1 compresses it. This field previously wasn't wired to anything.
         effective_transition_s = (config.transition_duration_ms / 1000) / max(0.01, config.animation_speed)
         steps = max(1, round(config.fps * effective_transition_s)) if config.smooth_animation else 0
-        interpolated = interpolate_frames(long_df, steps_per_transition=steps, interpolation=config.interpolation)
-        ranked = compute_frame_rankings(interpolated, config.bar_count, config.sort_direction)
+        interpolated = interpolate_frames(
+            long_df, steps_per_transition=steps,
+            sort_direction=config.sort_direction, interpolation=config.interpolation,
+        )
+        ranked = compute_frame_rankings(interpolated, config.bar_count)
         job["progress"] = 20
 
         resolution_px = RESOLUTION_PIXELS[config.resolution]

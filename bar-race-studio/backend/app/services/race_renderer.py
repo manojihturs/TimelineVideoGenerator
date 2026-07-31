@@ -175,7 +175,13 @@ def render_frames(
             values.append(row.value)
             bar_colors.append(colors.get(row.entity, DEFAULT_PALETTE[0]))
 
-        positions = np.arange(len(frame))[::-1]  # rank 1 at top/right
+        # continuous, not a plain per-frame index — rank itself was eased
+        # between each entity's real anchor-period ranks (dataframe_builder's
+        # interpolate_frames), so a bar overtaking another glides smoothly
+        # through fractional slots across the whole transition instead of
+        # snapping to a new integer position the instant the interpolated
+        # value crosses a neighbor's
+        positions = config.bar_count - frame["rank"].to_numpy()  # rank 1 at top/right
         # room past the longest bar for the value label + entity image,
         # so neither gets clipped at the right/top edge of the frame
         value_area = max_value * 0.35 if (config.show_value or config.show_images) else max_value * 0.1
@@ -184,7 +190,7 @@ def render_frames(
         # positioned text) — a rank number drawn near x=0 in data
         # coordinates visually collided with the tick labels matplotlib
         # already renders in that same screen region
-        tick_labels = [f"{int(r)}.  {lbl}" if config.show_rank else lbl
+        tick_labels = [f"{int(round(r))}.  {lbl}" if config.show_rank else lbl
                        for r, lbl in zip(frame["rank"], labels)]
 
         # extra tick-label padding when images are on, so the icon sitting

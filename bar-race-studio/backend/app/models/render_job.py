@@ -10,7 +10,7 @@ class FrameRow(BaseModel):
     category: str | None
     image_url: str | None
     value: float
-    rank: int
+    rank: float
 
 
 class FramesResponse(BaseModel):

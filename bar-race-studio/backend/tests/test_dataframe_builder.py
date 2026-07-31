@@ -78,8 +78,8 @@ def test_interpolate_frames_multiple_steps(sample_df, mapping):
 
 def test_compute_frame_rankings_descending(sample_df, mapping):
     long_df = build_long_dataframe(sample_df, mapping)
-    frames = interpolate_frames(long_df, steps_per_transition=0)
-    ranked = compute_frame_rankings(frames, bar_count=2, sort_direction=SortDirection.DESCENDING)
+    frames = interpolate_frames(long_df, steps_per_transition=0, sort_direction=SortDirection.DESCENDING)
+    ranked = compute_frame_rankings(frames, bar_count=2)
 
     period_0 = ranked[ranked.frame_index == 0].sort_values("rank")
     # period 2020 values: A=10, B=30, C=20 -> top 2 descending: B(30), C(20)
@@ -89,8 +89,8 @@ def test_compute_frame_rankings_descending(sample_df, mapping):
 
 def test_compute_frame_rankings_ascending(sample_df, mapping):
     long_df = build_long_dataframe(sample_df, mapping)
-    frames = interpolate_frames(long_df, steps_per_transition=0)
-    ranked = compute_frame_rankings(frames, bar_count=2, sort_direction=SortDirection.ASCENDING)
+    frames = interpolate_frames(long_df, steps_per_transition=0, sort_direction=SortDirection.ASCENDING)
+    ranked = compute_frame_rankings(frames, bar_count=2)
 
     period_0 = ranked[ranked.frame_index == 0].sort_values("rank")
     # ascending: smallest first -> A(10), C(20)
@@ -99,14 +99,26 @@ def test_compute_frame_rankings_ascending(sample_df, mapping):
 
 def test_compute_frame_rankings_respects_bar_count(sample_df, mapping):
     long_df = build_long_dataframe(sample_df, mapping)
-    frames = interpolate_frames(long_df, steps_per_transition=0)
-    ranked = compute_frame_rankings(frames, bar_count=1, sort_direction=SortDirection.DESCENDING)
+    frames = interpolate_frames(long_df, steps_per_transition=0, sort_direction=SortDirection.DESCENDING)
+    ranked = compute_frame_rankings(frames, bar_count=1)
     assert len(ranked[ranked.frame_index == 0]) == 1
+
+
+def test_rank_eases_smoothly_between_periods(sample_df, mapping):
+    """B leads at period 0 (rank 1) and falls to last at period 1 (rank
+    3) — the whole point of easing rank the same way value is eased is
+    that the midpoint of that transition shows B mid-slide (a fractional
+    rank strictly between 1 and 3), not still parked at one endpoint."""
+    long_df = build_long_dataframe(sample_df, mapping)
+    frames = interpolate_frames(long_df, steps_per_transition=1, sort_direction=SortDirection.DESCENDING)
+
+    midpoint_b = frames[(frames.entity == "B") & (frames.frame_index == 0.5)]
+    assert 1 < midpoint_b["rank"].iloc[0] < 3
 
 
 def test_empty_dataframe_does_not_crash(mapping):
     empty = pd.DataFrame(columns=["Entity", "Category", "2020", "2021"])
     long_df = build_long_dataframe(empty, mapping)
-    frames = interpolate_frames(long_df, steps_per_transition=2)
-    ranked = compute_frame_rankings(frames, bar_count=5, sort_direction=SortDirection.DESCENDING)
+    frames = interpolate_frames(long_df, steps_per_transition=2, sort_direction=SortDirection.DESCENDING)
+    ranked = compute_frame_rankings(frames, bar_count=5)
     assert ranked.empty

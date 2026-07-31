@@ -71,8 +71,11 @@ def preview_frames(config: RaceConfig):
     # small while still demonstrating smooth interpolation; the real
     # renderer will derive this from fps/transition_duration_ms instead
     steps = 4 if config.smooth_animation else 0
-    interpolated = interpolate_frames(long_df, steps_per_transition=steps)
-    ranked = compute_frame_rankings(interpolated, config.bar_count, config.sort_direction)
+    interpolated = interpolate_frames(
+        long_df, steps_per_transition=steps,
+        sort_direction=config.sort_direction, interpolation=config.interpolation,
+    )
+    ranked = compute_frame_rankings(interpolated, config.bar_count)
 
     frames = [
         {
@@ -81,7 +84,7 @@ def preview_frames(config: RaceConfig):
             "category": row.category,
             "image_url": row.image_url,
             "value": row.value,
-            "rank": int(row.rank),
+            "rank": row.rank,
         }
         for row in ranked.itertuples(index=False)
     ]

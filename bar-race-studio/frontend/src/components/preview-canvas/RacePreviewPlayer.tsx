@@ -51,7 +51,7 @@ export function RacePreviewPlayer({ frame, isLoading, error }: Props) {
           return (
             <div key={row.entity} className={`flex items-center gap-2 ${isVertical ? 'flex-col-reverse' : ''}`}>
               {config.show_rank && !isVertical && (
-                <span className="w-5 shrink-0 text-right text-xs font-bold" style={{ color: secondaryColor }}>{row.rank}</span>
+                <span className="w-5 shrink-0 text-right text-xs font-bold" style={{ color: secondaryColor }}>{Math.round(row.rank)}</span>
               )}
               <div
                 className={isVertical ? 'w-10' : 'flex-1'}

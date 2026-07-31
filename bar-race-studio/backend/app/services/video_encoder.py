@@ -4,6 +4,7 @@ necessary in this repo's other app.py: explicit -pix_fmt yuv420p and
 -movflags +faststart, since a plain ffmpeg default output there was
 rejected by Windows' Movies & TV app with a generic "unsupported
 encoding settings" error that those two flags fixed."""
+import glob
 import os
 import shutil
 import subprocess
@@ -20,7 +21,26 @@ RESOLUTION_PIXELS: dict[Resolution, tuple[int, int]] = {
 
 
 def resolve_ffmpeg() -> str:
-    return shutil.which("ffmpeg") or "ffmpeg"
+    """Find the ffmpeg binary. shutil.which() covers the normal case, but
+    on Windows a long-running process (e.g. this server, started before
+    ffmpeg was installed) keeps the PATH it was launched with — a fresh
+    shell would see an updated PATH, but this process won't until it's
+    restarted. Fall back to searching the winget install location directly
+    so newly-installed ffmpeg works without requiring a full machine/process
+    restart."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    local_appdata = os.environ.get("LOCALAPPDATA", "")
+    if local_appdata:
+        pattern = os.path.join(
+            local_appdata, "Microsoft", "WinGet", "Packages",
+            "Gyan.FFmpeg_*", "ffmpeg-*-full_build", "bin", "ffmpeg.exe",
+        )
+        matches = glob.glob(pattern)
+        if matches:
+            return matches[0]
+    return "ffmpeg"  # not found anywhere — let subprocess raise a clear error
 
 
 def encode_frames(
