@@ -59,6 +59,12 @@ class ImageResolver:
         self.size = size
         self.timeout = timeout
         self._cache: dict[str, Image.Image] = {}
+        # requests.get() builds a brand-new SSL context (and reloads the CA
+        # bundle from disk — ~0.7s each, profiled) on every single call. A
+        # session reuses one connection pool/SSL context across every fetch
+        # this resolver makes, which is the entire point of caching by URL
+        # in the first place.
+        self._session = requests.Session()
 
     def resolve(self, entity_name: str, image_url: str | None) -> Image.Image:
         cache_key = image_url or f"__initials__:{entity_name}"
@@ -74,7 +80,7 @@ class ImageResolver:
 
     def _fetch_and_crop(self, url: str) -> Image.Image | None:
         try:
-            resp = requests.get(url, timeout=self.timeout)
+            resp = self._session.get(url, timeout=self.timeout)
             resp.raise_for_status()
             img = Image.open(io.BytesIO(resp.content))
             return _make_circular(img, self.size)

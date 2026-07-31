@@ -136,9 +136,17 @@ def compute_frame_rankings(
     continuous rank interpolate_frames already assigned. Deliberately does
     not re-sort by value here — that would recompute a fresh, discrete
     order from the instantaneous interpolated value every substep and
-    reintroduce the instant position-snap this module exists to avoid."""
+    reintroduce the instant position-snap this module exists to avoid.
+
+    Also attaches `period_total` — the sum of every entity's value at that
+    frame_index, not just the visible top bar_count — computed here while
+    the full (unfiltered) set of entities is still available, since it's
+    gone once we drop everyone outside the top bar_count below."""
     if interpolated_df.empty:
-        return interpolated_df
+        return interpolated_df.assign(period_total=pd.Series(dtype=float))
+
+    totals = interpolated_df.groupby("frame_index")["value"].transform("sum")
+    interpolated_df = interpolated_df.assign(period_total=totals)
 
     ranked_frames = []
     for _, frame in interpolated_df.groupby("frame_index"):

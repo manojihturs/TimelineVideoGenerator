@@ -13,7 +13,7 @@ from app.core.settings import RENDERS_DIR
 from app.models.config import ExportFormat, RaceConfig
 from app.services.dataframe_builder import build_long_dataframe, compute_frame_rankings, interpolate_frames
 from app.services.dataset_service import load_dataframe
-from app.services.race_renderer import render_frames
+from app.services.race_renderer import render_frames_parallel
 from app.services.social_presets import apply_social_preset
 from app.services.style_presets import apply_style_preset
 from app.services.video_encoder import RESOLUTION_PIXELS, encode_frames, mix_background_music
@@ -69,7 +69,7 @@ def _run_render_job(job_id: str, config: RaceConfig, dataset_path: str) -> None:
         job["progress"] = 20
 
         resolution_px = RESOLUTION_PIXELS[config.resolution]
-        frame_paths = render_frames(ranked, config, tmp_frame_dir, resolution_px)
+        frame_paths = render_frames_parallel(ranked, config, tmp_frame_dir, resolution_px)
         job["progress"] = 80
 
         job["status"] = RenderStatus.ENCODING

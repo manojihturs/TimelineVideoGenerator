@@ -80,6 +80,11 @@ class WatermarkPosition(str, Enum):
     BOTTOM_RIGHT = "bottom_right"
 
 
+class ImagePosition(str, Enum):
+    INSIDE_BAR = "inside_bar"     # small icon near the bar's start, inside its fill
+    OUTSIDE_LEFT = "outside_left"  # one logo per row, outside the plot area — Flourish-style
+
+
 class ColumnMapping(BaseModel):
     entity_column: str
     category_column: str | None = None
@@ -121,6 +126,14 @@ class RaceConfig(BaseModel):
     show_axis: bool = True
     show_grid: bool = False
     smooth_animation: bool = True
+    image_position: ImagePosition = ImagePosition.INSIDE_BAR
+    # name+rank drawn in white directly on the bar instead of as an axis
+    # tick label — Flourish-style. Off by default: existing renders rely
+    # on the tick label being the only place the name appears.
+    overlay_labels_on_bars: bool = False
+    # sum of every entity's value at this frame (not just the visible top
+    # bar_count), shown under the big period-label overlay.
+    show_running_total: bool = False
 
     value_format: ValueFormat = ValueFormat.NUMBER
     value_decimal_places: int = 0
