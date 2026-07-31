@@ -30,6 +30,14 @@ export function UploadPage() {
 
       <DropzoneUpload onFileSelected={handleFile} />
 
+      <a
+        href="/csv_template.csv"
+        download
+        className="mt-3 inline-block text-sm text-violet-400 hover:text-violet-300 hover:underline"
+      >
+        Download a sample CSV template
+      </a>
+
       {isLoading && <p className="mt-4 text-sm text-gray-400">Uploading…</p>}
       {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
     </div>
