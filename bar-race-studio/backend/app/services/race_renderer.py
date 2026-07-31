@@ -127,7 +127,63 @@ def _render_state(ranked_df: pd.DataFrame, config: RaceConfig):
     return colors, max_value, text_color, secondary_text_color, grid_color
 
 
+def _create_reusable_figure(config: RaceConfig, resolution_px: tuple[int, int], watermark: np.ndarray | None):
+    """Creates the Figure/Axes ONCE per render (or per worker process),
+    plus the fig-level artists that never change across a job's frames
+    (title, subtitle, source label, watermark image). Figure creation
+    (font cache setup, backend canvas init) turned out to be a large,
+    fixed per-frame cost when profiled — larger than the actual drawing —
+    so reusing one Figure across every frame and just clearing+redrawing
+    the Axes each time (see _render_frame_to_file's ax.cla()) is the
+    single biggest lever here. Returns (fig, ax, period_label_text,
+    running_total_text) — the latter two are persistent Text artists the
+    per-frame draw updates via .set_text() rather than recreating (fig
+    -level artists like these survive ax.cla(), so creating a fresh one
+    every frame would silently accumulate overlapping duplicates)."""
+    width_px, height_px = resolution_px
+    dpi = 100
+    fig_size = (width_px / dpi, height_px / dpi)
+    text_color, secondary_text_color, _ = _contrast_text_color(config.background_color)
+
+    fig, ax = plt.subplots(figsize=fig_size, dpi=dpi)
+    fig.patch.set_facecolor(config.background_color)
+
+    if config.title:
+        fig.suptitle(config.title, color=text_color, fontsize=config.label_size_px * 1.2, fontweight="bold")
+    if config.subtitle:
+        # fig.text (not ax.set_title) so it survives ax.cla() between
+        # frames — an axes-level title would need to be re-set every
+        # frame just like the bars are
+        fig.text(0.01, 0.955, config.subtitle, color=secondary_text_color,
+                  fontsize=config.label_size_px * 0.7, ha="left", va="top")
+    if config.data_source_label:
+        fig.text(0.99, 0.01, f"Source: {config.data_source_label}", ha="right", va="bottom",
+                  color=secondary_text_color, fontsize=config.label_size_px * 0.5)
+
+    period_label_text = fig.text(0.985, 0.06, "", ha="right", va="bottom",
+                                  color=text_color, fontsize=config.label_size_px * 2.2,
+                                  fontweight="bold", alpha=0.85)
+    running_total_text = None
+    if config.show_running_total:
+        running_total_text = fig.text(0.985, 0.035, "", ha="right", va="bottom",
+                                       color=secondary_text_color, fontsize=config.label_size_px * 0.9)
+
+    if watermark is not None:
+        # static image, identical on every frame — set once here rather
+        # than inside the per-frame draw, where calling fig.figimage()
+        # again each frame would stack a new copy on top of the last
+        wm_h, wm_w = watermark.shape[0], watermark.shape[1]
+        x, y = _watermark_anchor(config.watermark_position, width_px, height_px, wm_w, wm_h)
+        fig.figimage(watermark, xo=x, yo=y, alpha=None, zorder=10)
+
+    return fig, ax, period_label_text, running_total_text
+
+
 def _render_frame_to_file(
+    fig,
+    ax,
+    period_label_text,
+    running_total_text,
     frame: pd.DataFrame,
     frame_index: float,
     config: RaceConfig,
@@ -142,22 +198,23 @@ def _render_frame_to_file(
     frame_path: str,
     fixed_margins: tuple[float, float, float, float] | None = None,
 ) -> tuple[float, float, float, float] | None:
-    """Renders one frame to frame_path. If fixed_margins is given, applies
-    it directly via subplots_adjust — skipping tight_layout()'s own
-    internal extra full-figure draw pass, which profiling showed as a
-    large share of every frame's cost (it re-measures every text/image
-    artist by literally rendering the figure a second time). This is safe
-    because the axis geometry (bar_count, rank range) is identical on
-    every frame of a render — only bar lengths and text content change —
-    so one frame's margins are correct for all of them. Otherwise (no
-    fixed_margins), computes them via tight_layout() and returns them, for
-    the one calibration call each render makes up front."""
+    """Draws one frame onto the already-created fig/ax (see
+    _create_reusable_figure) and saves it to frame_path. ax.cla() clears
+    everything from the previous frame's bars/labels/icons; fig-level
+    artists set up once (title, subtitle, source, watermark image) are
+    untouched by that and don't need re-adding. If fixed_margins is
+    given, applies it directly via subplots_adjust — skipping
+    tight_layout()'s own internal extra full-figure draw pass, which
+    profiling showed as a large share of every frame's cost (it
+    re-measures every text/image artist by literally rendering the
+    figure a second time). This is safe because the axis geometry
+    (bar_count, rank range) is identical on every frame of a render —
+    only bar lengths and text content change — so one frame's margins
+    are correct for all of them. Otherwise (no fixed_margins), computes
+    them via tight_layout() and returns them, for the one calibration
+    call each render makes up front."""
     width_px, height_px = resolution_px
-    dpi = 100
-    fig_size = (width_px / dpi, height_px / dpi)
-
-    fig, ax = plt.subplots(figsize=fig_size, dpi=dpi)
-    fig.patch.set_facecolor(config.background_color)
+    ax.cla()
     ax.set_facecolor(config.background_color)
 
     labels, values, bar_colors = [], [], []
@@ -308,26 +365,17 @@ def _render_frame_to_file(
 
     ax.tick_params(colors=secondary_text_color, labelsize=config.label_size_px * 0.55)
 
-    if config.title:
-        fig.suptitle(config.title, color=text_color, fontsize=config.label_size_px * 1.2, fontweight="bold")
-    if config.subtitle:
-        ax.set_title(config.subtitle, color=secondary_text_color, fontsize=config.label_size_px * 0.7, loc="left")
-    if config.data_source_label:
-        fig.text(0.99, 0.01, f"Source: {config.data_source_label}", ha="right", va="bottom",
-                  color=secondary_text_color, fontsize=config.label_size_px * 0.5)
-
-    # large bottom-right period/year watermark, separate from the
-    # title — the "current point in time" reads at a glance the way
-    # a big stylized year label does in historical-timeline-style
-    # bar chart races, rather than being buried in the title text
-    period_label = _period_label(frame_index, config.mapping.value_columns)
-    fig.text(0.985, 0.06, period_label, ha="right", va="bottom",
-              color=text_color, fontsize=config.label_size_px * 2.2, fontweight="bold", alpha=0.85)
-
-    if config.show_running_total and "period_total" in frame.columns and len(frame):
+    # title/subtitle/source label/watermark image are all set once in
+    # _create_reusable_figure (they're identical on every frame of a
+    # render and, being fig-level artists, survive ax.cla() above) —
+    # only the period label and running total actually change per frame,
+    # so those update the persistent Text artists in place rather than
+    # calling fig.text() again, which would silently stack a new
+    # overlapping label on top of every previous frame's.
+    period_label_text.set_text(_period_label(frame_index, config.mapping.value_columns))
+    if running_total_text is not None and "period_total" in frame.columns and len(frame):
         total_text = format_value(frame["period_total"].iloc[0], config.value_format, config.value_decimal_places)
-        fig.text(0.985, 0.035, f"Total: {total_text}", ha="right", va="bottom",
-                  color=secondary_text_color, fontsize=config.label_size_px * 0.9)
+        running_total_text.set_text(f"Total: {total_text}")
 
     if fixed_margins is not None:
         left, right, top, bottom = fixed_margins
@@ -340,18 +388,12 @@ def _render_frame_to_file(
         sp = fig.subplotpars
         result_margins = (sp.left, sp.right, sp.top, sp.bottom)
 
-    if watermark is not None:
-        wm_h, wm_w = watermark.shape[0], watermark.shape[1]
-        x, y = _watermark_anchor(config.watermark_position, width_px, height_px, wm_w, wm_h)
-        fig.figimage(watermark, xo=x, yo=y, alpha=None, zorder=10)
-
     # compress_level=1 (vs PIL's default 6): these PNGs are thrown away
     # the moment ffmpeg encodes them into the final video, so spending
     # CPU compressing them well is pure waste.
     fig.savefig(frame_path, facecolor=config.background_color,
                 transparent=config.transparent_background,
                 pil_kwargs={"compress_level": 1})
-    plt.close(fig)
     return result_margins
 
 
@@ -377,8 +419,13 @@ def _calibrate_margins(
     calib_index = frame_indices[len(frame_indices) // 2]
     calib_frame = ranked_df[ranked_df.frame_index == calib_index].sort_values("rank")
     calib_path = os.path.join(output_dir, "_margin_calibration.png")
-    margins = _render_frame_to_file(calib_frame, calib_index, config, colors, resolver, watermark, max_value,
-                                     resolution_px, text_color, secondary_text_color, grid_color, calib_path)
+    fig, ax, period_label_text, running_total_text = _create_reusable_figure(config, resolution_px, watermark)
+    try:
+        margins = _render_frame_to_file(fig, ax, period_label_text, running_total_text,
+                                         calib_frame, calib_index, config, colors, resolver, watermark, max_value,
+                                         resolution_px, text_color, secondary_text_color, grid_color, calib_path)
+    finally:
+        plt.close(fig)
     try:
         os.remove(calib_path)
     except OSError:
@@ -407,13 +454,18 @@ def render_frames(
 
     frame_indices = sorted(ranked_df["frame_index"].unique())
     paths = []
-    for i, frame_index in enumerate(frame_indices):
-        frame = ranked_df[ranked_df.frame_index == frame_index].sort_values("rank")
-        frame_path = os.path.join(output_dir, f"frame_{i:05d}.png")
-        _render_frame_to_file(frame, frame_index, config, colors, resolver, watermark, max_value,
-                               resolution_px, text_color, secondary_text_color, grid_color, frame_path,
-                               fixed_margins=margins)
-        paths.append(frame_path)
+    fig, ax, period_label_text, running_total_text = _create_reusable_figure(config, resolution_px, watermark)
+    try:
+        for i, frame_index in enumerate(frame_indices):
+            frame = ranked_df[ranked_df.frame_index == frame_index].sort_values("rank")
+            frame_path = os.path.join(output_dir, f"frame_{i:05d}.png")
+            _render_frame_to_file(fig, ax, period_label_text, running_total_text,
+                                   frame, frame_index, config, colors, resolver, watermark, max_value,
+                                   resolution_px, text_color, secondary_text_color, grid_color, frame_path,
+                                   fixed_margins=margins)
+            paths.append(frame_path)
+    finally:
+        plt.close(fig)
 
     return paths
 
@@ -434,13 +486,18 @@ def _render_chunk_worker(args) -> list[str]:
 
     frame_indices = sorted(chunk_df["frame_index"].unique())
     paths = []
-    for offset, frame_index in enumerate(frame_indices):
-        frame = chunk_df[chunk_df.frame_index == frame_index].sort_values("rank")
-        frame_path = os.path.join(output_dir, f"frame_{start_index + offset:05d}.png")
-        _render_frame_to_file(frame, frame_index, config, colors, resolver, watermark, max_value,
-                               resolution_px, text_color, secondary_text_color, grid_color, frame_path,
-                               fixed_margins=margins)
-        paths.append(frame_path)
+    fig, ax, period_label_text, running_total_text = _create_reusable_figure(config, resolution_px, watermark)
+    try:
+        for offset, frame_index in enumerate(frame_indices):
+            frame = chunk_df[chunk_df.frame_index == frame_index].sort_values("rank")
+            frame_path = os.path.join(output_dir, f"frame_{start_index + offset:05d}.png")
+            _render_frame_to_file(fig, ax, period_label_text, running_total_text,
+                                   frame, frame_index, config, colors, resolver, watermark, max_value,
+                                   resolution_px, text_color, secondary_text_color, grid_color, frame_path,
+                                   fixed_margins=margins)
+            paths.append(frame_path)
+    finally:
+        plt.close(fig)
     return paths
 
 
