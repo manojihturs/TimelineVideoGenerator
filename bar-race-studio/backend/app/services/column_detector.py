@@ -33,6 +33,16 @@ def _is_mostly_numeric(series: pd.Series) -> bool:
     return non_null > 0 and numeric.notna().sum() / non_null > 0.8
 
 
+def _non_blank_count(series: pd.Series) -> int:
+    """Empty/whitespace-only strings carry no information — an all-blank
+    column (e.g. an "Image URL" field nobody filled in) previously won
+    the category-column comparison purely because a single repeated ""
+    value technically has the lowest cardinality, not because it groups
+    rows meaningfully. Counting only genuinely non-blank values instead
+    keeps it from being selected as either entity or category."""
+    return series.astype(str).str.strip().replace("", pd.NA).notna().sum()
+
+
 def detect_columns(df: pd.DataFrame) -> DetectedColumns:
     sample = df.head(DETECTION_SAMPLE_ROWS)
     columns = list(df.columns)
@@ -46,7 +56,7 @@ def detect_columns(df: pd.DataFrame) -> DetectedColumns:
 
     text_columns = [
         c for c in non_timeline_columns
-        if c != image_column and not _is_mostly_numeric(sample[c])
+        if c != image_column and not _is_mostly_numeric(sample[c]) and _non_blank_count(sample[c]) > 0
     ]
 
     entity_column = None

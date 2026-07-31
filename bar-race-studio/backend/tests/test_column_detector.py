@@ -35,3 +35,20 @@ def test_no_image_column_detected_when_absent():
     assert result.image_column is None
     assert result.entity_column == "Brand"
     assert result.timeline_format == "year_month"
+
+
+def test_all_blank_column_not_picked_as_category_or_image():
+    # regression test: an entirely-empty "Image URL" column used to win
+    # the category-column comparison purely because a single repeated ""
+    # value has the lowest possible cardinality, even though it carries
+    # no real information
+    df = pd.DataFrame({
+        "Country Name": ["Toyota", "Volkswagen", "GM", "Ford"],
+        "Image URL": ["", "", "", ""],
+        "2020": [100, 90, 80, 70],
+        "2021": [110, 95, 85, 75],
+    })
+    result = detect_columns(df)
+    assert result.entity_column == "Country Name"
+    assert result.category_column is None
+    assert result.image_column is None
