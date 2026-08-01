@@ -323,12 +323,27 @@ function draw(frame, frameIndex) {{
       const barW = lengthFrac * plotW;
       ctx.fillRect(PLOT.left, slot - barThickness / 2, barW, barThickness);
 
+      let afterBarX = PLOT.left + barW + 10;
       if (DATA.overlayLabelsOnBars) {{
-        ctx.fillStyle = '#ffffff';
+        // white text reads fine while it fits inside the bar's own color,
+        // but a short bar (a low-share entity, or an early frame before
+        // the bar has grown) can't fit the label — white text spilling
+        // past the bar tip onto the white page background goes invisible.
+        // Falling back to solid text just past the bar tip, like the
+        // non-overlay label style, keeps every row's label always readable.
         ctx.font = `bold ${{Math.round(DATA.labelSizePx)}}px Arial, sans-serif`;
+        const labelWidth = ctx.measureText(bar.label).width;
+        const fitsInsideBar = labelWidth + 24 <= barW;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText(bar.label, PLOT.left + 12, slot);
+        if (fitsInsideBar) {{
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(bar.label, PLOT.left + 12, slot);
+        }} else {{
+          ctx.fillStyle = DATA.textColor;
+          ctx.fillText(bar.label, afterBarX, slot);
+          afterBarX += labelWidth + 10;
+        }}
       }} else {{
         ctx.fillStyle = DATA.textColor;
         ctx.font = `${{Math.round(DATA.labelSizePx * 0.8)}}px Arial, sans-serif`;
@@ -343,7 +358,7 @@ function draw(frame, frameIndex) {{
         ctx.font = `bold ${{Math.round(DATA.labelSizePx * 0.8)}}px Arial, sans-serif`;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText(bar.valueText, PLOT.left + barW + 10, slot);
+        ctx.fillText(bar.valueText, afterBarX, slot);
       }}
 
       if (DATA.showImages) {{
