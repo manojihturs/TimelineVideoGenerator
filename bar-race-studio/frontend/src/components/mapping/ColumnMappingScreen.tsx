@@ -5,8 +5,17 @@ interface Props {
   detected: DetectedColumns
 }
 
+const MAX_INLINE_VALUES = 12
+
 function ColumnRow({ label, value }: { label: string; value: string | string[] | null }) {
-  const display = Array.isArray(value) ? value.join(', ') : (value ?? '—')
+  let display: string
+  if (Array.isArray(value)) {
+    const shown = value.slice(0, MAX_INLINE_VALUES).join(', ')
+    const hiddenCount = value.length - MAX_INLINE_VALUES
+    display = hiddenCount > 0 ? `${shown}, +${hiddenCount} more` : shown
+  } else {
+    display = value ?? '—'
+  }
   return (
     <div className="flex items-center justify-between border-b border-gray-800 py-2 text-sm">
       <span className="text-gray-400">{label}</span>
