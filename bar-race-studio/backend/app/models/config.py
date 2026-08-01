@@ -85,6 +85,18 @@ class ImagePosition(str, Enum):
     OUTSIDE_LEFT = "outside_left"  # one logo per row, outside the plot area — Flourish-style
 
 
+class RenderEngine(str, Enum):
+    """MATPLOTLIB renders one PNG per frame server-side, then ffmpeg-encodes
+    the sequence — reliable, but per-frame cost scales with frame count.
+    CANVAS plays the exact same chart live in a headless Chromium tab and
+    captures that playback as video (the technique Flourish itself uses) —
+    capture time is bounded by the video's own duration, not frame count,
+    which is why it's the default. Both engines target the same visual
+    design; CANVAS is just a faster way to produce it."""
+    MATPLOTLIB = "matplotlib"
+    CANVAS = "canvas"
+
+
 class ColumnMapping(BaseModel):
     entity_column: str
     category_column: str | None = None
@@ -101,6 +113,8 @@ class RaceConfig(BaseModel):
     title: str = ""
     subtitle: str = ""
     data_source_label: str = ""
+
+    render_engine: RenderEngine = RenderEngine.CANVAS
 
     fps: int = 30
     animation_speed: float = 1.0
@@ -134,6 +148,7 @@ class RaceConfig(BaseModel):
     # sum of every entity's value at this frame (not just the visible top
     # bar_count), shown under the big period-label overlay.
     show_running_total: bool = False
+    show_clock_icon: bool = False
 
     value_format: ValueFormat = ValueFormat.NUMBER
     value_decimal_places: int = 0

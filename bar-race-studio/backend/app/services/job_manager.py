@@ -10,13 +10,16 @@ from enum import Enum
 
 from app.api.assets import resolve_asset_path
 from app.core.settings import RENDERS_DIR
-from app.models.config import ExportFormat, RaceConfig
+from app.models.config import ExportFormat, RaceConfig, RenderEngine
+from app.services.canvas_renderer import render_canvas_video
 from app.services.dataframe_builder import build_long_dataframe, compute_frame_rankings, interpolate_frames
 from app.services.dataset_service import load_dataframe
 from app.services.race_renderer import render_frames_parallel
 from app.services.social_presets import apply_social_preset
 from app.services.style_presets import apply_style_preset
-from app.services.video_encoder import RESOLUTION_PIXELS, encode_frames, mix_background_music
+from app.services.video_encoder import (
+    RESOLUTION_PIXELS, encode_captured_video, encode_frames, mix_background_music,
+)
 
 _EXPORT_EXTENSIONS = {
     ExportFormat.MP4: ".mp4",
@@ -69,13 +72,25 @@ def _run_render_job(job_id: str, config: RaceConfig, dataset_path: str) -> None:
         job["progress"] = 20
 
         resolution_px = RESOLUTION_PIXELS[config.resolution]
-        frame_paths = render_frames_parallel(ranked, config, tmp_frame_dir, resolution_px)
-        job["progress"] = 80
-
-        job["status"] = RenderStatus.ENCODING
         ext = _EXPORT_EXTENSIONS[config.export_format]
         video_path = os.path.join(RENDERS_DIR, f"{job_id}{ext}")
-        encode_frames(frame_paths, config.fps, config.export_format, video_path, config.transparent_background)
+
+        if config.render_engine == RenderEngine.CANVAS and config.export_format != ExportFormat.PNG_FRAMES:
+            # Canvas engine plays the whole animation live and captures it —
+            # there's no discrete "80% frames done, now encode" split like the
+            # matplotlib path has, so progress just jumps once capture finishes.
+            webm_path = render_canvas_video(ranked, config, tmp_frame_dir, resolution_px)
+            job["progress"] = 80
+            job["status"] = RenderStatus.ENCODING
+            n_frames = len(ranked["frame_index"].unique())
+            target_duration_s = n_frames / config.fps
+            encode_captured_video(webm_path, config.fps, config.export_format, video_path,
+                                   config.transparent_background, target_duration_s=target_duration_s)
+        else:
+            frame_paths = render_frames_parallel(ranked, config, tmp_frame_dir, resolution_px)
+            job["progress"] = 80
+            job["status"] = RenderStatus.ENCODING
+            encode_frames(frame_paths, config.fps, config.export_format, video_path, config.transparent_background)
 
         out_path = video_path
         if config.music_asset_id and config.export_format == ExportFormat.MP4:

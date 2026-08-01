@@ -5,10 +5,16 @@ from app.models.config import Orientation, RaceConfig, Resolution, SocialPreset
 
 # (resolution, orientation, suggested_max_seconds) — the duration is a
 # suggestion surfaced to the UI, not enforced by the renderer.
+#
+# Orientation here means bar orientation, not canvas orientation. Portrait
+# short-form video (Shorts/TikTok/Reels) still conventionally races
+# left-to-right horizontal bars on a taller canvas — switching to vertical
+# columns just because the canvas is portrait wastes most of the frame as
+# empty whitespace above the bars and reads as a different, worse chart type.
 SOCIAL_PRESET_SETTINGS: dict[SocialPreset, tuple[Resolution, Orientation, int]] = {
-    SocialPreset.YOUTUBE_SHORTS: (Resolution.VERTICAL_1080X1920, Orientation.VERTICAL, 60),
-    SocialPreset.TIKTOK: (Resolution.VERTICAL_1080X1920, Orientation.VERTICAL, 60),
-    SocialPreset.INSTAGRAM_REELS: (Resolution.VERTICAL_1080X1920, Orientation.VERTICAL, 90),
+    SocialPreset.YOUTUBE_SHORTS: (Resolution.VERTICAL_1080X1920, Orientation.HORIZONTAL, 60),
+    SocialPreset.TIKTOK: (Resolution.VERTICAL_1080X1920, Orientation.HORIZONTAL, 60),
+    SocialPreset.INSTAGRAM_REELS: (Resolution.VERTICAL_1080X1920, Orientation.HORIZONTAL, 90),
     SocialPreset.YOUTUBE_LANDSCAPE: (Resolution.HD_1080P, Orientation.HORIZONTAL, 600),
 }
 

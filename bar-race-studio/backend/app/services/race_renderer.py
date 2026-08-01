@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.offsetbox import AnnotationBbox, OffsetImage
+from matplotlib.patches import Ellipse
+from matplotlib.lines import Line2D
 from PIL import Image
 
 from app.models.config import ColorMode, Orientation, RaceConfig, WatermarkPosition
@@ -177,6 +179,35 @@ def _create_reusable_figure(config: RaceConfig, resolution_px: tuple[int, int], 
         fig.figimage(watermark, xo=x, yo=y, alpha=None, zorder=10)
 
     return fig, ax, period_label_text, running_total_text
+
+
+def _draw_clock_icon(ax, fig, frame_index: float, resolution_px: tuple[int, int], text_color: str) -> None:
+    """A small clock face with sweeping hands, drawn fresh each frame just
+    above the year label (bottom-right). Added via ax.add_patch/add_line
+    with a figure-fraction transform so it's cleared by the next frame's
+    ax.cla() along with everything else, rather than needing its own
+    remove-and-recreate bookkeeping like the static watermark does.
+    Rotation angle is driven directly by frame_index (not clock-accurate
+    time), purely as a spinning decorative cue that the race is progressing."""
+    width_px, height_px = resolution_px
+    aspect = width_px / height_px  # corrects the circle/hands so they read as round, not egg-shaped, in fig-fraction coords
+    cx, cy = 0.955, 0.175
+    r = 0.024
+
+    face = Ellipse((cx, cy), width=2 * r, height=2 * r * aspect, transform=fig.transFigure,
+                    facecolor="white", edgecolor=text_color, linewidth=1.5, zorder=6)
+    ax.add_patch(face)
+
+    minute_angle = np.radians((frame_index * 24) % 360)
+    hour_angle = np.radians((frame_index * 2) % 360)
+    for angle, length, width in ((minute_angle, r * 0.78, 1.4), (hour_angle, r * 0.48, 2.2)):
+        hand = Line2D(
+            [cx, cx + length * np.sin(angle)],
+            [cy, cy + length * aspect * np.cos(angle)],
+            transform=fig.transFigure, color=text_color, linewidth=width,
+            solid_capstyle="round", zorder=7,
+        )
+        ax.add_line(hand)
 
 
 def _render_frame_to_file(
@@ -376,6 +407,8 @@ def _render_frame_to_file(
     if running_total_text is not None and "period_total" in frame.columns and len(frame):
         total_text = format_value(frame["period_total"].iloc[0], config.value_format, config.value_decimal_places)
         running_total_text.set_text(f"Total: {total_text}")
+    if config.show_clock_icon:
+        _draw_clock_icon(ax, fig, frame_index, resolution_px, text_color)
 
     if fixed_margins is not None:
         left, right, top, bottom = fixed_margins
