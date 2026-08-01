@@ -18,6 +18,15 @@
   <div class="topbar-sub">local project → video pipeline</div>
 </header>
 
+<!-- Top-level product tabs — each entry here is a self-contained tool;
+     add more <button data-tab="..."> + matching #tab-<name> panel to grow
+     this list without touching the tab-switching logic itself. -->
+<nav class="top-tabs" id="top-tabs">
+  <button class="top-tab active" data-tab="timeline" type="button">Timeline</button>
+  <button class="top-tab" data-tab="barrace" type="button">Bar Race Chart</button>
+</nav>
+
+<div id="tab-timeline" class="tab-panel">
 <main id="app">
 
   <!-- ============ VIEW: PROJECT LIST ============ -->
@@ -333,7 +342,16 @@
   </section>
 
 </main>
+</div>
+
+<div id="tab-barrace" class="tab-panel hidden">
+  <!-- Bar Race Studio is a separate app (its own FastAPI backend +
+       Vite dev server) — embedded here rather than reimplemented.
+       data-src (not src) so it only loads once the tab is first opened. -->
+  <iframe id="barrace-frame" class="barrace-frame" data-src="http://localhost:5173" title="Bar Race Chart Studio"></iframe>
+</div>
 
 <script src="/static/js/app.js"></script>
+<script src="/static/js/tabs.js"></script>
 </body>
 </html>
