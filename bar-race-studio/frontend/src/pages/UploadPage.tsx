@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { DropzoneUpload } from '../components/upload/DropzoneUpload'
 import { uploadDataset } from '../api/uploads'
 
@@ -37,6 +37,12 @@ export function UploadPage() {
       >
         Download a sample CSV template
       </a>
+
+      <div className="mt-2">
+        <Link to="/format" className="text-sm text-violet-400 hover:text-violet-300 hover:underline">
+          Have unformatted files? Format &amp; auto-render them here &rarr;
+        </Link>
+      </div>
 
       {isLoading && <p className="mt-4 text-sm text-gray-400">Uploading…</p>}
       {error && <p className="mt-4 text-sm text-red-400">{error}</p>}

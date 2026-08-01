@@ -2,6 +2,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { UploadPage } from './pages/UploadPage'
 import { MappingPage } from './pages/MappingPage'
 import { StudioPage } from './pages/StudioPage'
+import { FormatPage } from './pages/FormatPage'
 
 function App() {
   return (
@@ -9,6 +10,7 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<UploadPage />} />
+          <Route path="/format" element={<FormatPage />} />
           <Route path="/mapping/:datasetId" element={<MappingPage />} />
           <Route path="/studio/:datasetId" element={<StudioPage />} />
         </Routes>
