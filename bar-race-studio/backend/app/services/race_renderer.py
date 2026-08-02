@@ -23,10 +23,27 @@ from app.services.style_presets import palette_for
 from app.api.assets import resolve_asset_path
 
 # fallback palette when style_preset is CUSTOM — style_presets.palette_for()
-# supplies the two designed palettes (sports_light / narrative_dark)
+# supplies the two designed palettes (sports_light / narrative_dark). Sized
+# to cover a full default bar_count (15) without wrapping, and ordered so
+# consecutive entries never share a hue family (no two blues, no two
+# greens back to back) — assigned in this order, adjacent bars always read
+# as clearly different colors instead of subtle shade variants.
 DEFAULT_PALETTE = [
-    "#2563EB", "#DC2626", "#059669", "#D97706", "#7C3AED",
-    "#0891B2", "#DB2777", "#65A30D", "#EA580C", "#4F46E5",
+    "#22C55E",  # green
+    "#FACC15",  # yellow
+    "#EC4899",  # pink
+    "#3B82F6",  # blue
+    "#F97316",  # orange
+    "#8B5CF6",  # purple
+    "#EF4444",  # red
+    "#14B8A6",  # teal
+    "#F43F5E",  # rose
+    "#A3E635",  # lime
+    "#6366F1",  # indigo
+    "#D97706",  # amber
+    "#06B6D4",  # cyan
+    "#D946EF",  # fuchsia
+    "#92400E",  # brown
 ]
 
 # Below this many total frames, ProcessPoolExecutor's spawn overhead costs

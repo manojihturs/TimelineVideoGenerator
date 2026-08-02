@@ -497,8 +497,27 @@ const IS_PORTRAIT = H > W;
 // strip together instead of needing separate per-element adjustment.
 const CONTENT_BOTTOM = IS_PORTRAIT ? H * 0.86 : H;
 
+// Long titles (mobile especially, where the frame is narrow) get wrapped
+// onto a second line rather than running off the edge of the canvas —
+// split on word boundaries only, never mid-word, and only once (title
+// cards are a single short headline, not a paragraph).
+function wrapTitleLines(title, maxLineLen) {{
+  if (!title || title.length <= maxLineLen) return title ? [title] : [];
+  const words = title.split(' ');
+  let line1 = '';
+  let i = 0;
+  for (; i < words.length; i++) {{
+    const candidate = line1 ? `${{line1}} ${{words[i]}}` : words[i];
+    if (candidate.length > maxLineLen && line1) break;
+    line1 = candidate;
+  }}
+  const line2 = words.slice(i).join(' ');
+  return line2 ? [line1, line2] : [line1];
+}}
+const TITLE_LINES = wrapTitleLines(DATA.title, 45);
+
 const PLOT = {{
-  top: H * (DATA.title ? 0.12 : 0.05),
+  top: H * (TITLE_LINES.length > 1 ? 0.17 : DATA.title ? 0.12 : 0.05),
   bottom: H * 0.04,
   left: W * (DATA.showImages && DATA.imagePosition === 'outside_left' ? 0.12 : 0.02),
   right: W * 0.05,
@@ -551,11 +570,15 @@ function draw(frame, frameIndex) {{
   ctx.fillStyle = DATA.backgroundColor;
   ctx.fillRect(0, 0, W, H);
 
-  if (DATA.title) {{
+  if (TITLE_LINES.length) {{
     ctx.fillStyle = DATA.textColor;
     ctx.font = `bold ${{Math.round(DATA.labelSizePx * 1.6)}}px Arial, sans-serif`;
     ctx.textAlign = 'center';
-    ctx.fillText(DATA.title, W / 2, H * 0.06);
+    const lineGap = DATA.labelSizePx * 1.9;
+    const startY = TITLE_LINES.length > 1 ? H * 0.045 : H * 0.06;
+    TITLE_LINES.forEach((line, idx) => {{
+      ctx.fillText(line, W / 2, startY + idx * lineGap);
+    }});
   }}
   if (DATA.subtitle) {{
     ctx.fillStyle = DATA.secondaryTextColor;
