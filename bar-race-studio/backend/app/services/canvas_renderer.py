@@ -276,79 +276,166 @@ function drawSparkles(cx, cy, rInner, rOuter, count, phase, frameIndex) {{
   ctx.restore();
 }}
 
-// A "SUBSCRIBED" confirmation badge (light pill, red left accent stripe,
-// small red corner flag) plus a separate bell button, both with
-// radiating sparkle ticks — reproduces the reference's simple geometric
-// style, not the earlier illustrated-hand version. Shown on both
-// orientations: centered in the reserved strip on portrait, anchored to
-// the bottom-right corner (clear of any bar) on landscape.
+function drawCursor(cx, cy, scale, color) {{
+  // small flat pointer with a thin outline — deliberately simple (a
+  // triangle + circle, not an illustrated hand) per the user's spec,
+  // and to avoid the earlier "awkward hand" look.
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.fillStyle = color;
+  ctx.strokeStyle = '#8a8f98';
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(0, 15);
+  ctx.lineTo(4, 11.5);
+  ctx.lineTo(6.5, 17);
+  ctx.lineTo(9, 15.8);
+  ctx.lineTo(6.6, 10.5);
+  ctx.lineTo(11, 10.2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}}
+
+function easeOutBack(t) {{
+  const c1 = 1.70158, c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}}
+function easeInOut(t) {{ return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }}
+function clamp01(t) {{ return Math.max(0, Math.min(1, t)); }}
+
+// A short looping sequence, matching the flow the user specced: idle red
+// "SUBSCRIBE" -> cursor arrives and clicks -> button flips to grey
+// "SUBSCRIBED" with the red accent stripe -> cursor moves to the bell ->
+// clicks it -> bell rings with motion-line sparkles -> settles -> loops.
+// Flat vector shapes throughout (no gradients/shadows), matching the
+// white/light/red/grey palette from the spec.
 function drawSubscribeBell(frameIndex) {{
   const scale = Math.min(W, H);
   const btnH = scale * 0.052;
   const padX = btnH * 0.55;
   const gap = btnH * 0.35;
   const bellR = btnH * 0.44;
+  const stripeW = btnH * 0.16;
+
+  const CYCLE = 150;  // 5s at 30fps
+  const t = frameIndex % CYCLE;
 
   ctx.font = `bold ${{Math.round(btnH * 0.36)}}px Arial, sans-serif`;
-  const textWidth = ctx.measureText('SUBSCRIBED').width;
-  const stripeW = btnH * 0.16;
-  const btnW = stripeW + textWidth + padX * 2;
+  const subscribedWidth = ctx.measureText('SUBSCRIBED').width;
+  const subscribeWidth = ctx.measureText('SUBSCRIBE').width;
 
-  // Centered horizontally either way — the period label/running
-  // total/clock live at the bottom-RIGHT (see draw(), below), so a
-  // right-anchored badge here would collide with them on landscape.
+  const clickButtonAt = 25, subscribedAt = 33;
+  const isSubscribed = t >= subscribedAt;
+  const label = isSubscribed ? 'SUBSCRIBED' : 'SUBSCRIBE';
+  const textWidth = isSubscribed ? subscribedWidth : subscribeWidth;
+  const btnW = (isSubscribed ? stripeW : 0) + textWidth + padX * 2;
+
   let cy;
   if (IS_PORTRAIT) {{
     cy = (CONTENT_BOTTOM + H) / 2;
   }} else {{
     cy = H - scale * 0.035 - btnH / 2;
   }}
-  const btnX = W * 0.5 - (btnW + gap + bellR * 2) / 2;
+  // Use the post-click width for layout so the bell doesn't shift once
+  // the button widens for "SUBSCRIBED" — only the button's own fill
+  // animates width; bell position stays fixed all cycle.
+  const layoutBtnW = stripeW + subscribedWidth + padX * 2;
+  const btnX = W * 0.5 - (layoutBtnW + gap + bellR * 2) / 2;
   const btnY = cy - btnH / 2;
+  const bellCx = btnX + layoutBtnW + gap + bellR;
 
-  // button: light fill, rounded, red left accent stripe
+  // button click bounce
+  const clickT = clamp01((t - clickButtonAt) / 8);
+  const btnBounce = t < clickButtonAt ? 1 : (clickT < 1 ? 0.88 + 0.12 * easeOutBack(clickT) : 1);
+
   ctx.save();
-  ctx.fillStyle = '#e9ebee';
+  ctx.translate(btnX + btnW / 2, cy);
+  ctx.scale(btnBounce, btnBounce);
+  ctx.translate(-(btnX + btnW / 2), -cy);
+
+  ctx.fillStyle = isSubscribed ? '#e9ebee' : '#e11d2e';
   ctx.beginPath();
   ctx.roundRect(btnX, btnY, btnW, btnH, btnH * 0.16);
   ctx.fill();
-  ctx.beginPath();
-  ctx.roundRect(btnX, btnY, stripeW * 2.2, btnH, [btnH * 0.16, 0, 0, btnH * 0.16]);
-  ctx.clip();
-  ctx.fillStyle = '#e11d2e';
-  ctx.fillRect(btnX, btnY, stripeW, btnH);
-  ctx.restore();
 
-  ctx.fillStyle = '#5b6270';
+  if (isSubscribed) {{
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(btnX, btnY, stripeW * 2.2, btnH, [btnH * 0.16, 0, 0, btnH * 0.16]);
+    ctx.clip();
+    ctx.fillStyle = '#e11d2e';
+    ctx.fillRect(btnX, btnY, stripeW, btnH);
+    ctx.restore();
+  }}
+
+  ctx.fillStyle = isSubscribed ? '#5b6270' : '#ffffff';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillText('SUBSCRIBED', btnX + stripeW + padX, cy + 1);
+  ctx.fillText(label, btnX + (isSubscribed ? stripeW : 0) + padX, cy + 1);
 
-  // small red corner-flag accent, top-right of the button
-  ctx.save();
-  ctx.fillStyle = '#e11d2e';
-  ctx.beginPath();
-  ctx.moveTo(btnX + btnW - btnH * 0.32, btnY + btnH * 0.14);
-  ctx.lineTo(btnX + btnW - btnH * 0.06, btnY + btnH * 0.14);
-  ctx.lineTo(btnX + btnW - btnH * 0.06, btnY + btnH * 0.58);
-  ctx.closePath();
-  ctx.fill();
+  if (isSubscribed) {{
+    ctx.save();
+    ctx.fillStyle = '#e11d2e';
+    ctx.beginPath();
+    ctx.moveTo(btnX + btnW - btnH * 0.32, btnY + btnH * 0.14);
+    ctx.lineTo(btnX + btnW - btnH * 0.06, btnY + btnH * 0.14);
+    ctx.lineTo(btnX + btnW - btnH * 0.06, btnY + btnH * 0.58);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }}
   ctx.restore();
 
-  drawSparkles(btnX + btnW * 0.15, cy, btnH * 0.6, btnH * 0.95, 3, 3.6, frameIndex);
+  if (isSubscribed) drawSparkles(btnX + btnW * 0.15, cy, btnH * 0.6, btnH * 0.95, 3, 3.6, frameIndex);
 
-  // bell, in its own light circular button
-  const bellCx = btnX + btnW + gap + bellR;
+  // bell, in its own light circular button — rings (rotation wiggle) and
+  // bounces right after its click window
+  const clickBellAt = 95;
+  const bellClickT = clamp01((t - clickBellAt) / 8);
+  const bellBounce = t < clickBellAt ? 1 : (bellClickT < 1 ? 0.85 + 0.15 * easeOutBack(bellClickT) : 1);
+  const ringing = t >= clickBellAt && t < clickBellAt + 25;
+  const ring = ringing ? Math.sin((t - clickBellAt) * 1.4) * 0.28 * (1 - (t - clickBellAt) / 25) : 0;
+
   ctx.save();
+  ctx.translate(bellCx, cy);
+  ctx.scale(bellBounce, bellBounce);
   ctx.fillStyle = '#ffffff';
   ctx.beginPath();
-  ctx.arc(bellCx, cy, bellR, 0, Math.PI * 2);
+  ctx.arc(0, 0, bellR, 0, Math.PI * 2);
   ctx.fill();
-  ctx.translate(bellCx, cy);
+  ctx.rotate(ring);
   drawBellFilled(bellR * 0.55, '#9aa0aa');
   ctx.restore();
 
-  drawSparkles(bellCx, cy, bellR * 1.05, bellR * 1.45, 4, 0.7, frameIndex);
+  if (ringing) drawSparkles(bellCx, cy, bellR * 1.05, bellR * 1.55, 5, 0.7, frameIndex * 2);
+  else drawSparkles(bellCx, cy, bellR * 1.05, bellR * 1.45, 4, 0.7, frameIndex);
+
+  // cursor: rests near the button, slides over to click it, slides to
+  // the bell, clicks that, then returns — a simple triangular pointer,
+  // not an illustrated hand
+  const restBtn = {{x: btnX + btnW * 0.7, y: btnY + btnH * 1.9}};
+  const restBell = {{x: bellCx + bellR * 0.3, y: cy + bellR * 1.9}};
+  let cx, cyy;
+  if (t < clickButtonAt) {{
+    const p = easeInOut(clamp01(t / clickButtonAt));
+    cx = restBell.x + (restBtn.x - restBell.x) * p;
+    cyy = restBell.y + (restBtn.y - restBell.y) * p;
+  }} else if (t < 70) {{
+    cx = restBtn.x; cyy = restBtn.y;
+  }} else if (t < 90) {{
+    const p = easeInOut(clamp01((t - 70) / 20));
+    cx = restBtn.x + (restBell.x - restBtn.x) * p;
+    cyy = restBtn.y + (restBell.y - restBtn.y) * p;
+  }} else {{
+    cx = restBell.x; cyy = restBell.y;
+  }}
+  const cursorScale = (scale * 0.0011) * (t >= clickButtonAt - 3 && t < clickButtonAt + 3 ? 0.85 : 1) *
+                       (t >= clickBellAt - 3 && t < clickBellAt + 3 ? 0.85 : 1);
+  drawCursor(cx, cyy, cursorScale, '#ffffff');
 }}
 
 function drawClock(frameIndex, cx, cy) {{

@@ -15,6 +15,7 @@ from app.models.config import ColumnMapping, RaceConfig, Resolution, SocialPrese
 from app.services import job_manager
 from app.services.column_detector import detect_columns
 from app.services.dataset_service import load_dataframe
+from app.services.timeline_parser import match_header
 
 JOB_TIMEOUT_S = 3600
 JOB_POLL_INTERVAL_S = 3
@@ -35,6 +36,31 @@ def _duration_config(mapping: ColumnMapping, target_seconds: float, fps: int) ->
     return round(steps / fps * 1000)
 
 
+def _year_span(mapping: ColumnMapping) -> int | None:
+    """Years covered by the dataset's timeline columns (max - min + 1),
+    however the timeline is actually broken down (months/quarters/weeks
+    all still carry a year component) — None if no column carries a
+    recognizable year at all (e.g. a purely quarter-only or week-only
+    timeline with no year prefix)."""
+    years = [m.sort_key[0] for col in mapping.value_columns if (m := match_header(col)) and m.sort_key and m.sort_key[0]]
+    return (max(years) - min(years) + 1) if years else None
+
+
+def _desktop_target_seconds(mapping: ColumnMapping) -> float:
+    """Longer historical spans get a longer desktop video so there's
+    still time to read each period before the race moves on, rather than
+    cramming e.g. 200 years of monthly data into the same fixed 5
+    minutes a 10-year dataset gets."""
+    span = _year_span(mapping)
+    if span is None or span < 100:
+        return 300  # 5 min
+    if span < 150:
+        return 480  # 8 min
+    if span < 200:
+        return 660  # 11 min
+    return 780  # 13 min
+
+
 def _build_configs(mapping: ColumnMapping, title: str, source_label: str) -> tuple[RaceConfig, RaceConfig]:
     fps = 30
     common = dict(
@@ -44,7 +70,7 @@ def _build_configs(mapping: ColumnMapping, title: str, source_label: str) -> tup
     )
     desktop = RaceConfig(
         dataset_id="watcher", resolution=Resolution.HD_1080P,
-        transition_duration_ms=_duration_config(mapping, 300, fps), **common,
+        transition_duration_ms=_duration_config(mapping, _desktop_target_seconds(mapping), fps), **common,
     )
     mobile = RaceConfig(
         dataset_id="watcher", resolution=Resolution.VERTICAL_1080X1920,
