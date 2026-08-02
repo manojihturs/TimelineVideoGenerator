@@ -276,16 +276,18 @@ function drawSparkles(cx, cy, rInner, rOuter, count, phase, frameIndex) {{
   ctx.restore();
 }}
 
-function drawCursor(cx, cy, scale, color) {{
+function drawCursor(cx, cy, scale) {{
   // small flat pointer with a thin outline — deliberately simple (a
   // triangle + circle, not an illustrated hand) per the user's spec,
-  // and to avoid the earlier "awkward hand" look.
+  // and to avoid the earlier "awkward hand" look. Dark fill + light
+  // outline so it reads against the light button/bell it's clicking,
+  // not white-on-white (invisible on a light background).
   ctx.save();
   ctx.translate(cx, cy);
   ctx.scale(scale, scale);
-  ctx.fillStyle = color;
-  ctx.strokeStyle = '#8a8f98';
-  ctx.lineWidth = 1.4;
+  ctx.fillStyle = '#2b2f36';
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.6;
   ctx.beginPath();
   ctx.moveTo(0, 0);
   ctx.lineTo(0, 15);
@@ -414,14 +416,22 @@ function drawSubscribeBell(frameIndex) {{
   if (ringing) drawSparkles(bellCx, cy, bellR * 1.05, bellR * 1.55, 5, 0.7, frameIndex * 2);
   else drawSparkles(bellCx, cy, bellR * 1.05, bellR * 1.45, 4, 0.7, frameIndex);
 
-  // cursor: rests near the button, slides over to click it, slides to
-  // the bell, clicks that, then returns — a simple triangular pointer,
-  // not an illustrated hand
-  const restBtn = {{x: btnX + btnW * 0.7, y: btnY + btnH * 1.9}};
-  const restBell = {{x: bellCx + bellR * 0.3, y: cy + bellR * 1.9}};
+  // cursor: its tip lands ON the button/bell (not floating below them,
+  // which read as "nothing happening" — the click needs to visually
+  // touch what it's clicking), slides between the two, with a stronger
+  // press-down dip right at each click moment.
+  const restBtn = {{x: btnX + btnW * 0.78, y: btnY + btnH * 0.72}};
+  const restBell = {{x: bellCx + bellR * 0.55, y: cy + bellR * 0.5}};
+  const pressBump = (clickAt) => {{
+    const d = Math.abs(t - clickAt);
+    return d < 10 ? (1 - d / 10) : 0;
+  }};
+
   let cx, cyy;
-  if (t < clickButtonAt) {{
-    const p = easeInOut(clamp01(t / clickButtonAt));
+  if (t < 15) {{
+    cx = restBell.x; cyy = restBell.y;
+  }} else if (t < clickButtonAt) {{
+    const p = easeInOut(clamp01((t - 15) / (clickButtonAt - 15)));
     cx = restBell.x + (restBtn.x - restBell.x) * p;
     cyy = restBell.y + (restBtn.y - restBell.y) * p;
   }} else if (t < 70) {{
@@ -433,9 +443,9 @@ function drawSubscribeBell(frameIndex) {{
   }} else {{
     cx = restBell.x; cyy = restBell.y;
   }}
-  const cursorScale = (scale * 0.0011) * (t >= clickButtonAt - 3 && t < clickButtonAt + 3 ? 0.85 : 1) *
-                       (t >= clickBellAt - 3 && t < clickBellAt + 3 ? 0.85 : 1);
-  drawCursor(cx, cyy, cursorScale, '#ffffff');
+  cyy += (t < 40 ? pressBump(clickButtonAt) * btnH : pressBump(clickBellAt) * bellR) * 0.28;
+  const cursorScale = scale * 0.0016;
+  drawCursor(cx, cyy, cursorScale);
 }}
 
 function drawClock(frameIndex, cx, cy) {{
