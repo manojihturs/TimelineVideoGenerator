@@ -32,8 +32,10 @@ MOBILE_END_VIDEO = Path(os.environ.get("BAR_RACE_MOBILE_END_VIDEO", PROJECT_ROOT
 # Shown for INTRO_IMAGE_SECONDS at the very start of every render, before
 # the chart animation begins — covers the canvas-capture engine's brief
 # blank-white startup gap (page load + first paint) as a deliberate title
-# card instead of an accidental flash.
-WELCOME_IMAGE = Path(os.environ.get("BAR_RACE_WELCOME_IMAGE", PROJECT_ROOT / "Welcome pic.png"))
+# card instead of an accidental flash. Desktop and mobile get their own
+# image (different aspect ratios), same split as the end videos below.
+WELCOME_IMAGE_DESKTOP = Path(os.environ.get("BAR_RACE_WELCOME_IMAGE_DESKTOP", PROJECT_ROOT / "Welcome pic desktop.png"))
+WELCOME_IMAGE_MOBILE = Path(os.environ.get("BAR_RACE_WELCOME_IMAGE_MOBILE", PROJECT_ROOT / "Welcome pic mobile.png"))
 INTRO_IMAGE_SECONDS = 2.5
 
 # One track is picked at random per render when the user hasn't supplied

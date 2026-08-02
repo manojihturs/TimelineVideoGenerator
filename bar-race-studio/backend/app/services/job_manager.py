@@ -11,7 +11,8 @@ from enum import Enum
 
 from app.api.assets import resolve_asset_path
 from app.core.settings import (
-    DESKTOP_END_VIDEO, INTRO_IMAGE_SECONDS, MOBILE_END_VIDEO, MUSIC_DIR, RENDERS_DIR, WELCOME_IMAGE,
+    DESKTOP_END_VIDEO, INTRO_IMAGE_SECONDS, MOBILE_END_VIDEO, MUSIC_DIR, RENDERS_DIR,
+    WELCOME_IMAGE_DESKTOP, WELCOME_IMAGE_MOBILE,
 )
 from app.models.config import ExportFormat, RaceConfig, RenderEngine, Resolution
 from app.services.canvas_renderer import render_canvas_video
@@ -125,14 +126,16 @@ def _run_render_job(job_id: str, config: RaceConfig, dataset_path: str) -> None:
 
         out_path = video_path
         if config.export_format == ExportFormat.MP4:
-            end_video = MOBILE_END_VIDEO if config.resolution == Resolution.VERTICAL_1080X1920 else DESKTOP_END_VIDEO
+            is_mobile = config.resolution == Resolution.VERTICAL_1080X1920
+            end_video = MOBILE_END_VIDEO if is_mobile else DESKTOP_END_VIDEO
+            welcome_image = WELCOME_IMAGE_MOBILE if is_mobile else WELCOME_IMAGE_DESKTOP
             with_end_path = os.path.join(RENDERS_DIR, f"{job_id}-with-end-{job['output_filename']}")
             append_end_video(out_path, end_video, with_end_path, resolution_px[0], resolution_px[1], config.fps)
             os.remove(out_path)
             out_path = with_end_path
 
             with_intro_path = os.path.join(RENDERS_DIR, f"{job_id}-with-intro-{job['output_filename']}")
-            prepend_intro_image(out_path, WELCOME_IMAGE, with_intro_path,
+            prepend_intro_image(out_path, welcome_image, with_intro_path,
                                  resolution_px[0], resolution_px[1], config.fps, INTRO_IMAGE_SECONDS)
             os.remove(out_path)
             out_path = with_intro_path
