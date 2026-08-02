@@ -3,14 +3,20 @@ directly, or written by the /api/format endpoint) and, for each one,
 auto-detects its columns, renders a 5-minute desktop video and a 60-second
 mobile short, then moves the source file to Processed (or Failed, with an
 error note alongside it, if anything along the way didn't work) so it's
-never picked up and re-processed on the next poll."""
+never picked up and re-processed on the next poll.
+
+A file is claimed into InProgress the instant a scan picks it up, before
+rendering even starts — a render can run for 10-20+ minutes, and without
+this, killing/restarting the process mid-render leaves the file sitting
+untouched in Unprocessed, where the next scan (this run or a future one)
+sees it as brand new and renders a duplicate pair of videos from scratch."""
 import re
 import shutil
 import threading
 import time
 from pathlib import Path
 
-from app.core.settings import FAILED_DIR, FOLDER_WATCH_INTERVAL_S, PROCESSED_DIR, UNPROCESSED_DIR
+from app.core.settings import FAILED_DIR, FOLDER_WATCH_INTERVAL_S, INPROGRESS_DIR, PROCESSED_DIR, UNPROCESSED_DIR
 from app.models.config import ColumnMapping, RaceConfig, Resolution, SocialPreset
 from app.services import job_manager
 from app.services.column_detector import detect_columns
@@ -118,7 +124,7 @@ def _process_file(path: Path) -> None:
         raise RuntimeError("; ".join(errors) or "Render job failed")
 
 
-def _move_with_note(src: Path, dest_dir: Path, note: str | None = None) -> None:
+def _move_with_note(src: Path, dest_dir: Path, note: str | None = None) -> Path:
     dest = dest_dir / src.name
     counter = 2
     while dest.exists():
@@ -127,9 +133,22 @@ def _move_with_note(src: Path, dest_dir: Path, note: str | None = None) -> None:
     shutil.move(str(src), str(dest))
     if note:
         dest.with_suffix(dest.suffix + ".error.txt").write_text(note, encoding="utf-8")
+    return dest
 
 
 _last_seen_size: dict[str, int] = {}
+
+
+def _reclaim_interrupted_files() -> None:
+    """Runs once at startup. Anything sitting in InProgress means the
+    previous process died mid-render (a clean run always empties this
+    directory via _move_with_note in scan_now) — move it back to
+    Unprocessed so it's retried exactly once, rather than staying stuck
+    forever or a naive "just rescan Unprocessed" approach silently
+    re-rendering it every single restart."""
+    for entry in list(INPROGRESS_DIR.iterdir()):
+        if entry.is_file():
+            _move_with_note(entry, UNPROCESSED_DIR)
 
 
 def scan_now() -> None:
@@ -149,13 +168,16 @@ def scan_now() -> None:
         if _last_seen_size.get(key) != size:
             _last_seen_size[key] = size
             continue
-
-        try:
-            _process_file(entry)
-            _move_with_note(entry, PROCESSED_DIR)
-        except Exception as e:
-            _move_with_note(entry, FAILED_DIR, note=str(e))
         _last_seen_size.pop(key, None)
+
+        # Claimed into InProgress before any rendering starts — see
+        # module docstring for why this specific ordering matters.
+        claimed = _move_with_note(entry, INPROGRESS_DIR)
+        try:
+            _process_file(claimed)
+            _move_with_note(claimed, PROCESSED_DIR)
+        except Exception as e:
+            _move_with_note(claimed, FAILED_DIR, note=str(e))
 
     for key in list(_last_seen_size):
         if key not in seen_this_scan:
@@ -172,4 +194,5 @@ def _watch_loop() -> None:
 
 
 def start_watcher() -> None:
+    _reclaim_interrupted_files()
     threading.Thread(target=_watch_loop, daemon=True).start()

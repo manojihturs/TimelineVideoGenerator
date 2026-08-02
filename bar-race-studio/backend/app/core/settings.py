@@ -21,6 +21,14 @@ UNPROCESSED_DIR = UPLOADS_DIR / "Unprocessed"
 PROCESSED_DIR = UPLOADS_DIR / "Processed"
 FAILED_DIR = UPLOADS_DIR / "Failed"
 FORMAT_ONLY_DIR = UPLOADS_DIR / "Format"
+# A file lives here for the whole render (moved out of Unprocessed the
+# instant a scan claims it, before rendering even starts) so a second
+# scan — or a fresh watcher after the process was restarted mid-render —
+# can never pick up the same file again and render duplicate videos. On
+# startup, anything still sitting here is a render that got interrupted
+# last time the process died; it's moved back to Unprocessed exactly
+# once so it gets retried, not left stuck or silently re-duplicated.
+INPROGRESS_DIR = UPLOADS_DIR / "InProgress"
 
 # Same end-video-append feature as this project's other app.py, reusing
 # the same two files rather than requiring a second copy — bar-race-studio
@@ -65,5 +73,5 @@ PREVIEW_ROW_COUNT = 10
 # app already uses.
 FOLDER_WATCH_INTERVAL_S = 5
 
-for d in (UPLOADS_DIR, RENDERS_DIR, ASSETS_DIR, UNPROCESSED_DIR, PROCESSED_DIR, FAILED_DIR, FORMAT_ONLY_DIR):
+for d in (UPLOADS_DIR, RENDERS_DIR, ASSETS_DIR, UNPROCESSED_DIR, PROCESSED_DIR, FAILED_DIR, FORMAT_ONLY_DIR, INPROGRESS_DIR):
     d.mkdir(parents=True, exist_ok=True)
