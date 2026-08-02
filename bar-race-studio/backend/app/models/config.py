@@ -131,7 +131,7 @@ class RaceConfig(BaseModel):
 
     background_color: str = "#FFFFFF"
     font_family: str = "Inter"
-    label_size_px: int = 16
+    label_size_px: int = 26
 
     show_images: bool = True
     show_category: bool = True

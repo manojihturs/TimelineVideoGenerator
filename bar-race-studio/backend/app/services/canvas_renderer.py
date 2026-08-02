@@ -226,7 +226,7 @@ function drawBrandLogo() {{
   // Anchored to the true canvas bottom (H), not CONTENT_BOTTOM — on
   // portrait that lands it inside the reserved strip (alongside, not
   // under, the subscribe/bell), clear of the chart rows above it.
-  const d = Math.min(W, H) * (IS_PORTRAIT ? 0.07 : 0.09);
+  const d = Math.min(W, H) * (IS_PORTRAIT ? 0.085 : 0.105);
   const margin = W * 0.025;
   const x = margin, y = H - margin - d;
   ctx.save();
@@ -317,7 +317,7 @@ function clamp01(t) {{ return Math.max(0, Math.min(1, t)); }}
 // white/light/red/grey palette from the spec.
 function drawSubscribeBell(frameIndex) {{
   const scale = Math.min(W, H);
-  const btnH = scale * 0.052;
+  const btnH = scale * 0.065;
   const padX = btnH * 0.55;
   const gap = btnH * 0.35;
   const bellR = btnH * 0.44;
@@ -454,7 +454,7 @@ function drawSubscribeBell(frameIndex) {{
 }}
 
 function drawClock(frameIndex, cx, cy) {{
-  const r = Math.min(W, H) * 0.024;
+  const r = Math.min(W, H) * 0.03;
   ctx.save();
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -498,10 +498,10 @@ const IS_PORTRAIT = H > W;
 const CONTENT_BOTTOM = IS_PORTRAIT ? H * 0.86 : H;
 
 const PLOT = {{
-  top: H * (DATA.title ? 0.13 : 0.06),
-  bottom: H * 0.06,
-  left: W * (DATA.showImages && DATA.imagePosition === 'outside_left' ? 0.14 : 0.03),
-  right: W * 0.14,
+  top: H * (DATA.title ? 0.12 : 0.05),
+  bottom: H * 0.04,
+  left: W * (DATA.showImages && DATA.imagePosition === 'outside_left' ? 0.12 : 0.02),
+  right: W * 0.05,
 }};
 const plotW = W - PLOT.left - PLOT.right;
 const plotH = CONTENT_BOTTOM - PLOT.top - PLOT.bottom;
@@ -615,7 +615,7 @@ function draw(frame, frameIndex) {{
       }}
 
       if (DATA.showImages) {{
-        const radius = rowSpan * 0.32;
+        const radius = rowSpan * 0.44;
         if (DATA.imagePosition === 'outside_left') {{
           drawAvatar(PLOT.left - radius - 18, slot, radius, bar.entity, bar.imageUrl);
         }} else {{
@@ -660,7 +660,7 @@ function draw(frame, frameIndex) {{
       }}
 
       if (DATA.showImages) {{
-        const radius = rowSpan * 0.32;
+        const radius = rowSpan * 0.44;
         drawAvatar(slot, barY - radius - 12, radius, bar.entity, bar.imageUrl);
       }}
     }}
