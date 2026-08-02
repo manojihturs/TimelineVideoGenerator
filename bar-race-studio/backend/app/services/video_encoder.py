@@ -6,9 +6,11 @@ rejected by Windows' Movies & TV app with a generic "unsupported
 encoding settings" error that those two flags fixed."""
 import glob
 import os
+import random
 import shutil
 import subprocess
 import zipfile
+from pathlib import Path
 
 from app.models.config import ExportFormat, Resolution
 
@@ -104,6 +106,19 @@ def probe_duration_seconds(path: str) -> float:
     return float(result.stdout.strip())
 
 
+# Playwright starts recording the instant the browser context is created —
+# before the page has navigated to the local HTML file and before its
+# first draw() call has painted anything, so every capture opens on a
+# beat of blank white. How long that gap actually is varies with dataset
+# size (a larger embedded frame-data payload takes longer to parse before
+# the first draw() call fires), so this trim is deliberately generous —
+# a little real animation lost off the very first ~1s is invisible, but
+# cutting it short leaves a residual white flash. The intro image
+# (job_manager's prepend_intro_image step) covers this gap visually
+# regardless, so a slightly-too-generous trim here is a non-issue.
+LEAD_TRIM_SECONDS = 1.2
+
+
 def encode_captured_video(
     webm_path: str,
     fps: int,
@@ -121,26 +136,28 @@ def encode_captured_video(
     animation loop paces itself at 1000/fps per tick, but draw + video-
     encoder overhead per tick isn't free, so actual wall-clock playback
     runs slightly slower than the video's nominal content duration). If
-    target_duration_s is given, the whole clip is uniformly retimed via
-    setpts to land on that exact duration — content-preserving (nothing
-    is trimmed or duplicated, just played back at the corrected speed)
-    rather than cutting the tail off with -t."""
+    target_duration_s is given, the remaining clip (after the fixed
+    LEAD_TRIM_SECONDS blank-frame trim) is uniformly retimed via setpts to
+    land on that exact duration — content-preserving beyond the lead trim
+    itself, not cutting the tail off with -t."""
     ffmpeg = resolve_ffmpeg()
+    actual_duration_s = probe_duration_seconds(webm_path)
+    trim_s = min(LEAD_TRIM_SECONDS, max(0.0, actual_duration_s - 0.1))
+
     speed_filter = []
     if target_duration_s and target_duration_s > 0:
-        actual_duration_s = probe_duration_seconds(webm_path)
-        if actual_duration_s > 0:
-            multiplier = target_duration_s / actual_duration_s
-            speed_filter = [f"setpts={multiplier}*PTS"]
+        remaining_s = max(0.01, actual_duration_s - trim_s)
+        multiplier = target_duration_s / remaining_s
+        speed_filter = [f"setpts={multiplier}*PTS"]
 
     if export_format == ExportFormat.GIF:
         palette_path = os.path.join(os.path.dirname(out_path), "_palette.png")
         vf = ",".join(speed_filter + ["palettegen"]) if speed_filter else "palettegen"
         subprocess.run([
-            ffmpeg, "-y", "-i", webm_path, "-vf", vf, palette_path,
+            ffmpeg, "-y", "-ss", str(trim_s), "-i", webm_path, "-vf", vf, palette_path,
         ], check=True, capture_output=True)
         vf2 = ",".join(speed_filter) if speed_filter else None
-        cmd = [ffmpeg, "-y", "-i", webm_path, "-i", palette_path]
+        cmd = [ffmpeg, "-y", "-ss", str(trim_s), "-i", webm_path, "-i", palette_path]
         if vf2:
             cmd += ["-filter_complex", f"[0:v]{vf2}[v];[v][1:v]paletteuse"]
         else:
@@ -151,7 +168,7 @@ def encode_captured_video(
 
     pix_fmt = "yuva420p" if transparent_background else "yuv420p"
     vf = ",".join(speed_filter) if speed_filter else None
-    cmd = [ffmpeg, "-y", "-i", webm_path]
+    cmd = [ffmpeg, "-y", "-ss", str(trim_s), "-i", webm_path]
     if vf:
         cmd += ["-vf", vf]
     cmd += [
@@ -162,6 +179,86 @@ def encode_captured_video(
     ]
     subprocess.run(cmd, check=True, capture_output=True)
     return out_path
+
+
+END_VIDEO_XFADE_SECONDS = 1.0
+
+
+def append_end_video(main_path: str, end_video_path: Path | str, out_path: str, width: int, height: int, fps: int) -> str:
+    """Slides end_video_path's VIDEO ONLY in from the right over the last
+    END_VIDEO_XFADE_SECONDS of main_path (ffmpeg's xfade "slideleft"
+    transition), same technique already proven out in this project's other
+    app.py. end_video_path's own audio track is deliberately dropped —
+    mix_background_music adds one continuous looped bed over the whole
+    combined duration afterward instead, so there's no audio seam at the
+    cut. No-ops (copies main_path through) if end_video_path doesn't
+    exist, so a missing/not-yet-configured end video never breaks a
+    render."""
+    end_video_path = Path(end_video_path)
+    if not end_video_path.is_file():
+        shutil.copy2(main_path, out_path)
+        return out_path
+
+    ffmpeg = resolve_ffmpeg()
+    main_duration = probe_duration_seconds(main_path)
+    offset = max(0.0, main_duration - END_VIDEO_XFADE_SECONDS)
+    subprocess.run([
+        ffmpeg, "-y",
+        "-i", main_path,
+        "-i", str(end_video_path),
+        "-filter_complex",
+        f"[0:v]fps={fps}[v0];"
+        f"[1:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}[v1];"
+        f"[v0][v1]xfade=transition=slideleft:duration={END_VIDEO_XFADE_SECONDS}:offset={offset}[outv]",
+        "-map", "[outv]",
+        "-c:v", "libx264", "-preset", "veryfast",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+        out_path,
+    ], check=True, capture_output=True)
+    return out_path
+
+
+def prepend_intro_image(main_path: str, image_path: Path | str, out_path: str, width: int, height: int, fps: int, duration_s: float) -> str:
+    """Holds image_path as a still title card for duration_s, then cuts to
+    main_path — covers the canvas engine's blank-white startup gap with a
+    deliberate image instead of an accidental flash. No-ops (copies
+    main_path through) if image_path doesn't exist, so a missing/not-yet-
+    configured intro image never breaks a render."""
+    image_path = Path(image_path)
+    if not image_path.is_file():
+        shutil.copy2(main_path, out_path)
+        return out_path
+
+    ffmpeg = resolve_ffmpeg()
+    subprocess.run([
+        ffmpeg, "-y",
+        "-loop", "1", "-t", str(duration_s), "-i", str(image_path),
+        "-i", main_path,
+        "-filter_complex",
+        f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}[v0];"
+        f"[1:v]fps={fps}[v1];"
+        f"[v0][v1]concat=n=2:v=1:a=0[outv]",
+        "-map", "[outv]",
+        "-c:v", "libx264", "-preset", "veryfast",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+        out_path,
+    ], check=True, capture_output=True)
+    return out_path
+
+
+def pick_random_music(music_dir: Path | str) -> Path | None:
+    """One track chosen at random from music_dir's .mp3 files — the same
+    'auto background music' behavior as this project's other app.py,
+    reused here as the default when a render doesn't specify its own
+    music_asset_id. Returns None (silent) if the folder is missing or
+    empty rather than failing the render."""
+    music_dir = Path(music_dir)
+    if not music_dir.is_dir():
+        return None
+    tracks = list(music_dir.glob("*.mp3"))
+    return random.choice(tracks) if tracks else None
 
 
 def mix_background_music(video_path: str, music_path: str, volume: float, out_path: str) -> str:

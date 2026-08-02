@@ -17,6 +17,26 @@ UNPROCESSED_DIR = UPLOADS_DIR / "Unprocessed"
 PROCESSED_DIR = UPLOADS_DIR / "Processed"
 FAILED_DIR = UPLOADS_DIR / "Failed"
 
+# Same end-video-append feature as this project's other app.py, reusing
+# the same two files rather than requiring a second copy — bar-race-studio
+# lives nested two directories under the project root they sit in.
+PROJECT_ROOT = BACKEND_DIR.parent.parent
+DESKTOP_END_VIDEO = Path(os.environ.get("BAR_RACE_DESKTOP_END_VIDEO", PROJECT_ROOT / "Desktop End video.mp4"))
+MOBILE_END_VIDEO = Path(os.environ.get("BAR_RACE_MOBILE_END_VIDEO", PROJECT_ROOT / "Mobile End video.mp4"))
+
+# Shown for INTRO_IMAGE_SECONDS at the very start of every render, before
+# the chart animation begins — covers the canvas-capture engine's brief
+# blank-white startup gap (page load + first paint) as a deliberate title
+# card instead of an accidental flash.
+WELCOME_IMAGE = Path(os.environ.get("BAR_RACE_WELCOME_IMAGE", PROJECT_ROOT / "Welcome pic.png"))
+INTRO_IMAGE_SECONDS = 2.5
+
+# One track is picked at random per render when the user hasn't supplied
+# their own music_asset_id — same "auto background music" behavior as
+# this project's other app.py, reusing its already-cleared royalty-free
+# folder rather than requiring a second copy.
+MUSIC_DIR = Path(os.environ.get("BAR_RACE_MUSIC_DIR", PROJECT_ROOT / "music"))
+
 MAX_UPLOAD_BYTES = int(os.environ.get("BAR_RACE_MAX_UPLOAD_MB", "50")) * 1024 * 1024
 ALLOWED_UPLOAD_EXTENSIONS = {".csv", ".xlsx", ".xls"}
 

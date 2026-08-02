@@ -210,7 +210,7 @@ function drawWatermark() {{
 }}
 
 function drawClock(frameIndex) {{
-  const cx = W * 0.955, cy = H * 0.83;
+  const cx = W * 0.955, cy = CONTENT_BOTTOM - H * 0.17;
   const r = Math.min(W, H) * 0.024;
   ctx.save();
   ctx.beginPath();
@@ -244,6 +244,16 @@ function drawClock(frameIndex) {{
 // fractions of the canvas rather than measuring text, since canvas has
 // no tight_layout() equivalent — good enough for a consistent design,
 // not meant to be pixel-identical to matplotlib's own metrics.
+const IS_PORTRAIT = H > W;
+// A strip left completely untouched by any chart element on portrait
+// (mobile) exports — that's where a platform's own subscribe/bell/like
+// overlay lands when the video plays as a Short/Reel, and it collides
+// with real content otherwise. All the bottom-anchored elements below
+// (period label, running total, clock, source) are positioned relative
+// to CONTENT_BOTTOM rather than H itself, so they shift up out of that
+// strip together instead of needing separate per-element adjustment.
+const CONTENT_BOTTOM = IS_PORTRAIT ? H * 0.86 : H;
+
 const PLOT = {{
   top: H * (DATA.title ? 0.13 : 0.06),
   bottom: H * 0.06,
@@ -251,7 +261,7 @@ const PLOT = {{
   right: W * 0.14,
 }};
 const plotW = W - PLOT.left - PLOT.right;
-const plotH = H - PLOT.top - PLOT.bottom;
+const plotH = CONTENT_BOTTOM - PLOT.top - PLOT.bottom;
 const rowSpan = HORIZONTAL ? plotH / DATA.barCount : plotW / DATA.barCount;
 
 function formatAxisValue(v) {{
@@ -313,7 +323,7 @@ function draw(frame, frameIndex) {{
 
   drawAxis();
 
-  const barThickness = rowSpan * 0.78;
+  const barThickness = rowSpan * 0.58;
   for (const bar of frame.bars) {{
     const slot = PLOT_ORIGIN_FOR(bar.rank);
     const lengthFrac = bar.value / DATA.maxValue;
@@ -419,12 +429,12 @@ function draw(frame, frameIndex) {{
   ctx.font = `bold ${{Math.round(DATA.labelSizePx * 2)}}px Arial, sans-serif`;
   ctx.textAlign = 'right';
   ctx.textBaseline = 'alphabetic';
-  ctx.fillText(frame.periodLabel, W * 0.985, H * 0.95);
+  ctx.fillText(frame.periodLabel, W * 0.985, CONTENT_BOTTOM - H * 0.05);
 
   if (frame.totalText) {{
     ctx.fillStyle = DATA.secondaryTextColor;
     ctx.font = `${{Math.round(DATA.labelSizePx * 0.85)}}px Arial, sans-serif`;
-    ctx.fillText('Total: ' + frame.totalText, W * 0.985, H * 0.97);
+    ctx.fillText('Total: ' + frame.totalText, W * 0.985, CONTENT_BOTTOM - H * 0.03);
   }}
 
   if (DATA.showClockIcon) drawClock(frameIndex);
@@ -433,7 +443,7 @@ function draw(frame, frameIndex) {{
     ctx.fillStyle = DATA.secondaryTextColor;
     ctx.font = `${{Math.round(DATA.labelSizePx * 0.5)}}px Arial, sans-serif`;
     ctx.textAlign = 'right';
-    ctx.fillText(DATA.sourceLabel, W * 0.99, H * 0.99);
+    ctx.fillText(DATA.sourceLabel, W * 0.99, CONTENT_BOTTOM - H * 0.01);
   }}
 }}
 

@@ -50,7 +50,7 @@ def download_render(job_id: str):
         raise HTTPException(404, "Render job not found")
     if job["status"] != job_manager.RenderStatus.DONE or not job["output_path"]:
         raise HTTPException(409, f"Render is not finished (status: {job['status']})")
-    return FileResponse(job["output_path"])
+    return FileResponse(job["output_path"], filename=job.get("output_filename"))
 
 
 @router.post("/preview-frames", response_model=FramesResponse)
