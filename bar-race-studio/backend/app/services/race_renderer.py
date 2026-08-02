@@ -67,8 +67,14 @@ def _resolve_colors(ranked_df: pd.DataFrame, config: RaceConfig) -> dict[str, st
         keys = sorted(ranked_df["entity"].unique())
         return {k: palette[rng.integers(0, len(palette))] for k in keys}
 
-    # CATEGORY (default): color by category if present, else fall back to entity
-    group_col = "category" if ranked_df["category"].notna().any() else "entity"
+    # CATEGORY (default): color by category, but only if it actually
+    # varies — a category column that's present but constant (or blank-
+    # but-non-null) across every row previously still "counted" as
+    # having category data, collapsing every entity into one color
+    # group. Grouping by entity instead whenever there's fewer than 2
+    # distinct categories keeps bars visually distinguishable regardless
+    # of how uninformative the category column turns out to be.
+    group_col = "category" if ranked_df["category"].dropna().nunique() > 1 else "entity"
     keys = sorted(ranked_df[group_col].dropna().unique())
     color_by_group = {k: palette[i % len(palette)] for i, k in enumerate(keys)}
     return {
