@@ -21,6 +21,7 @@ import pandas as pd
 from playwright.sync_api import sync_playwright
 
 from app.api.assets import resolve_asset_path
+from app.core.settings import BRAND_LOGO
 from app.models.config import Orientation, RaceConfig, WatermarkPosition
 from app.services.race_renderer import _contrast_text_color, _period_label, _resolve_colors
 from app.services.value_formatting import format_value
@@ -40,6 +41,10 @@ def _watermark_data_uri(config: RaceConfig) -> str | None:
     path = resolve_asset_path(config.watermark_asset_id)
     if path is None:
         return None
+    return _data_uri(path)
+
+
+def _data_uri(path) -> str | None:
     try:
         mime = mimetypes.guess_type(str(path))[0] or "image/png"
         with open(path, "rb") as f:
@@ -87,6 +92,7 @@ def _build_html(
     secondary_text_color: str,
     grid_color: str,
     watermark_data_uri: str | None,
+    brand_logo_data_uri: str | None,
 ) -> str:
     width_px, height_px = resolution_px
     payload = {
@@ -116,6 +122,7 @@ def _build_html(
         "watermarkPosition": config.watermark_position.value,
         "watermarkOpacity": config.watermark_opacity,
         "watermarkScale": config.watermark_scale,
+        "brandLogo": brand_logo_data_uri,
     }
     # JSON going into an inline <script> block — guard the one sequence
     # that would otherwise prematurely close it if a title/label ever
@@ -209,8 +216,73 @@ function drawWatermark() {{
   ctx.restore();
 }}
 
-function drawClock(frameIndex) {{
-  const cx = W * 0.955, cy = CONTENT_BOTTOM - H * 0.17;
+let brandLogoImg = null;
+if (DATA.brandLogo) {{
+  brandLogoImg = new Image();
+  brandLogoImg.src = DATA.brandLogo;
+}}
+function drawBrandLogo() {{
+  if (!brandLogoImg || !brandLogoImg.complete || !brandLogoImg.naturalWidth) return;
+  // Anchored to the true canvas bottom (H), not CONTENT_BOTTOM — on
+  // portrait that lands it inside the reserved strip (alongside, not
+  // under, the subscribe/bell), clear of the chart rows above it.
+  const d = Math.min(W, H) * (IS_PORTRAIT ? 0.07 : 0.09);
+  const margin = W * 0.025;
+  const x = margin, y = H - margin - d;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x + d / 2, y + d / 2, d / 2, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+  ctx.drawImage(brandLogoImg, x, y, d, d);
+  ctx.restore();
+}}
+
+// Drawn only in the reserved bottom strip on portrait exports — a
+// simple pulsing "SUBSCRIBE" pill + wiggling bell, cueing the viewer
+// toward the platform's own overlay in that same area rather than
+// relying on it alone to carry the prompt.
+function drawSubscribeBell(frameIndex) {{
+  if (!IS_PORTRAIT) return;
+  const stripTop = CONTENT_BOTTOM, stripBottom = H;
+  const cy = (stripTop + stripBottom) / 2;
+  const pulse = 1 + 0.06 * Math.sin(frameIndex * 0.35);
+
+  const btnW = W * 0.34 * pulse, btnH = H * 0.032 * pulse;
+  const btnX = W * 0.5 - btnW / 2 - W * 0.03, btnY = cy - btnH / 2;
+  ctx.save();
+  ctx.fillStyle = '#e11d2e';
+  ctx.beginPath();
+  ctx.roundRect(btnX, btnY, btnW, btnH, btnH / 2);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold ${{Math.round(btnH * 0.52)}}px Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('SUBSCRIBE', btnX + btnW / 2, btnY + btnH / 2 + 1);
+  ctx.restore();
+
+  // bell, wiggling side to side just right of the button
+  const bellCx = btnX + btnW + W * 0.06, bellCy = cy;
+  const bellR = Math.min(W, H) * 0.026;
+  const wiggle = Math.sin(frameIndex * 0.5) * 0.22;
+  ctx.save();
+  ctx.translate(bellCx, bellCy);
+  ctx.rotate(wiggle);
+  ctx.fillStyle = '#f5c518';
+  ctx.beginPath();
+  ctx.arc(0, -bellR * 0.15, bellR, Math.PI * 0.05, Math.PI * 0.95, true);
+  ctx.lineTo(-bellR * 0.85, bellR * 0.55);
+  ctx.quadraticCurveTo(0, bellR * 0.85, bellR * 0.85, bellR * 0.55);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(0, bellR * 0.75, bellR * 0.16, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}}
+
+function drawClock(frameIndex, cx, cy) {{
   const r = Math.min(W, H) * 0.024;
   ctx.save();
   ctx.beginPath();
@@ -323,7 +395,7 @@ function draw(frame, frameIndex) {{
 
   drawAxis();
 
-  const barThickness = rowSpan * 0.58;
+  const barThickness = rowSpan * 0.42;
   for (const bar of frame.bars) {{
     const slot = PLOT_ORIGIN_FOR(bar.rank);
     const lengthFrac = bar.value / DATA.maxValue;
@@ -424,12 +496,16 @@ function draw(frame, frameIndex) {{
   }}
 
   drawWatermark();
+  drawBrandLogo();
+  drawSubscribeBell(frameIndex);
 
+  const periodFont = `bold ${{Math.round(DATA.labelSizePx * 2)}}px Arial, sans-serif`;
   ctx.fillStyle = DATA.textColor;
-  ctx.font = `bold ${{Math.round(DATA.labelSizePx * 2)}}px Arial, sans-serif`;
+  ctx.font = periodFont;
   ctx.textAlign = 'right';
   ctx.textBaseline = 'alphabetic';
-  ctx.fillText(frame.periodLabel, W * 0.985, CONTENT_BOTTOM - H * 0.05);
+  const periodRightX = W * 0.985, periodY = CONTENT_BOTTOM - H * 0.05;
+  ctx.fillText(frame.periodLabel, periodRightX, periodY);
 
   if (frame.totalText) {{
     ctx.fillStyle = DATA.secondaryTextColor;
@@ -437,7 +513,12 @@ function draw(frame, frameIndex) {{
     ctx.fillText('Total: ' + frame.totalText, W * 0.985, CONTENT_BOTTOM - H * 0.03);
   }}
 
-  if (DATA.showClockIcon) drawClock(frameIndex);
+  if (DATA.showClockIcon) {{
+    ctx.font = periodFont;  // measured with the same font it was drawn in, above
+    const periodTextWidth = ctx.measureText(frame.periodLabel).width;
+    const clockR = Math.min(W, H) * 0.024;
+    drawClock(frameIndex, periodRightX - periodTextWidth / 2, periodY - DATA.labelSizePx * 2 * 0.9 - clockR - 6);
+  }}
 
   if (DATA.sourceLabel) {{
     ctx.fillStyle = DATA.secondaryTextColor;
@@ -487,8 +568,10 @@ def render_canvas_video(
 
     frames = _build_frame_payload(ranked_df, config, colors)
     watermark_data_uri = _watermark_data_uri(config)
+    brand_logo_data_uri = _data_uri(BRAND_LOGO) if BRAND_LOGO.is_file() else None
     html = _build_html(frames, config, resolution_px, max_value,
-                        text_color, secondary_text_color, grid_color, watermark_data_uri)
+                        text_color, secondary_text_color, grid_color,
+                        watermark_data_uri, brand_logo_data_uri)
 
     html_path = os.path.join(output_dir, "_canvas_race.html")
     with open(html_path, "w", encoding="utf-8") as f:

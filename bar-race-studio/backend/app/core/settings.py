@@ -37,6 +37,11 @@ INTRO_IMAGE_SECONDS = 2.5
 # folder rather than requiring a second copy.
 MUSIC_DIR = Path(os.environ.get("BAR_RACE_MUSIC_DIR", PROJECT_ROOT / "music"))
 
+# Persistent brand mark drawn bottom-left on every frame of the chart
+# itself (distinct from RaceConfig.watermark_asset_id, which is a
+# per-render opt-in the user configures per project — this one is fixed).
+BRAND_LOGO = Path(os.environ.get("BAR_RACE_BRAND_LOGO", PROJECT_ROOT / "DataHunt Logo.png"))
+
 MAX_UPLOAD_BYTES = int(os.environ.get("BAR_RACE_MAX_UPLOAD_MB", "50")) * 1024 * 1024
 ALLOWED_UPLOAD_EXTENSIONS = {".csv", ".xlsx", ".xls"}
 
