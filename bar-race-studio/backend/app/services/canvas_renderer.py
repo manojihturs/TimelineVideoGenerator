@@ -238,127 +238,117 @@ function drawBrandLogo() {{
   ctx.restore();
 }}
 
-// Drawn only in the reserved bottom strip on portrait exports —
-// thumbs-up, SUBSCRIBE pill, and bell as three separate elements side by
-// side (matching the classic YouTube subscribe-animation layout the user
-// referenced), with a clicking hand cursor over the pill.
-function drawBellOutline(cx, cy, r, angle, color) {{
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.rotate(angle);
-  ctx.strokeStyle = color;
-  ctx.lineWidth = r * 0.14;
-  ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
+function drawBellFilled(r, color) {{
+  ctx.fillStyle = color;
   ctx.beginPath();
   ctx.arc(0, -r * 0.05, r * 0.7, Math.PI, 0, false);
   ctx.quadraticCurveTo(r * 0.75, r * 0.35, r * 0.95, r * 0.62);
   ctx.quadraticCurveTo(0, r * 0.85, -r * 0.95, r * 0.62);
   ctx.quadraticCurveTo(-r * 0.75, r * 0.35, -r * 0.7, -r * 0.05);
   ctx.closePath();
-  ctx.stroke();
+  ctx.fill();
   ctx.beginPath();
   ctx.arc(0, -r * 0.78, r * 0.1, 0, Math.PI * 2);
-  ctx.fillStyle = color;
   ctx.fill();
   ctx.beginPath();
-  ctx.arc(0, r * 0.78, r * 0.13, -Math.PI * 0.2, Math.PI * 1.1);
-  ctx.stroke();
+  ctx.arc(0, r * 0.78, r * 0.12, 0, Math.PI * 2);
+  ctx.fill();
+}}
+
+// Small radiating dashes around a point, fading in/out on a loop —
+// the "just subscribed" sparkle cue from the reference.
+function drawSparkles(cx, cy, rInner, rOuter, count, phase, frameIndex) {{
+  ctx.save();
+  ctx.lineCap = 'round';
+  for (let i = 0; i < count; i++) {{
+    const a = (i / count) * Math.PI * 2 + phase;
+    const twinkle = Math.sin(frameIndex * 0.12 + i * 1.7);
+    const alpha = Math.max(0, twinkle) * 0.8;
+    if (alpha < 0.05) continue;
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#c9ccd1';
+    ctx.lineWidth = rOuter * 0.05;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * rInner, cy + Math.sin(a) * rInner);
+    ctx.lineTo(cx + Math.cos(a) * rOuter, cy + Math.sin(a) * rOuter);
+    ctx.stroke();
+  }}
   ctx.restore();
 }}
 
-function drawThumbsUp(cx, cy, size, color) {{
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.fillStyle = color;
-  // palm/fist
-  ctx.beginPath();
-  ctx.roundRect(-size * 0.42, -size * 0.05, size * 0.84, size * 0.55, size * 0.14);
-  ctx.fill();
-  // thumb, angled up-left
-  ctx.save();
-  ctx.translate(-size * 0.18, -size * 0.05);
-  ctx.rotate(-0.35);
-  ctx.beginPath();
-  ctx.roundRect(-size * 0.15, -size * 0.55, size * 0.3, size * 0.6, size * 0.14);
-  ctx.fill();
-  ctx.restore();
-  ctx.restore();
-}}
-
+// A "SUBSCRIBED" confirmation badge (light pill, red left accent stripe,
+// small red corner flag) plus a separate bell button, both with
+// radiating sparkle ticks — reproduces the reference's simple geometric
+// style, not the earlier illustrated-hand version. Shown on both
+// orientations: centered in the reserved strip on portrait, anchored to
+// the bottom-right corner (clear of any bar) on landscape.
 function drawSubscribeBell(frameIndex) {{
-  if (!IS_PORTRAIT) return;
-  const stripTop = CONTENT_BOTTOM, stripBottom = H;
-  const cy = (stripTop + stripBottom) / 2;
-  const pulse = 1 + 0.045 * Math.sin(frameIndex * 0.3);
+  const scale = Math.min(W, H);
+  const btnH = scale * 0.052;
+  const padX = btnH * 0.55;
+  const gap = btnH * 0.35;
+  const bellR = btnH * 0.44;
 
-  const btnH = H * 0.038 * pulse;
-  const padX = btnH * 0.7;
+  ctx.font = `bold ${{Math.round(btnH * 0.36)}}px Arial, sans-serif`;
+  const textWidth = ctx.measureText('SUBSCRIBED').width;
+  const stripeW = btnH * 0.16;
+  const btnW = stripeW + textWidth + padX * 2;
 
-  ctx.font = `bold ${{Math.round(btnH * 0.46)}}px Arial, sans-serif`;
-  const textWidth = ctx.measureText('SUBSCRIBE').width;
-  const btnW = textWidth + padX * 2;
-  const btnX = W * 0.5 - btnW / 2, btnY = cy - btnH / 2;
+  // Centered horizontally either way — the period label/running
+  // total/clock live at the bottom-RIGHT (see draw(), below), so a
+  // right-anchored badge here would collide with them on landscape.
+  let cy;
+  if (IS_PORTRAIT) {{
+    cy = (CONTENT_BOTTOM + H) / 2;
+  }} else {{
+    cy = H - scale * 0.035 - btnH / 2;
+  }}
+  const btnX = W * 0.5 - (btnW + gap + bellR * 2) / 2;
+  const btnY = cy - btnH / 2;
 
-  const sideGap = btnH * 0.65;
-  const iconR = btnH * 0.42;
+  // button: light fill, rounded, red left accent stripe
+  ctx.save();
+  ctx.fillStyle = '#e9ebee';
+  ctx.beginPath();
+  ctx.roundRect(btnX, btnY, btnW, btnH, btnH * 0.16);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.roundRect(btnX, btnY, stripeW * 2.2, btnH, [btnH * 0.16, 0, 0, btnH * 0.16]);
+  ctx.clip();
+  ctx.fillStyle = '#e11d2e';
+  ctx.fillRect(btnX, btnY, stripeW, btnH);
+  ctx.restore();
 
-  // thumbs-up, bobbing gently, to the left of the pill
-  const bob = Math.sin(frameIndex * 0.22) * btnH * 0.06;
-  drawThumbsUp(btnX - sideGap - iconR, cy + bob, iconR * 1.7, '#3ea6ff');
+  ctx.fillStyle = '#5b6270';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('SUBSCRIBED', btnX + stripeW + padX, cy + 1);
 
-  // pill
+  // small red corner-flag accent, top-right of the button
   ctx.save();
   ctx.fillStyle = '#e11d2e';
   ctx.beginPath();
-  ctx.roundRect(btnX, btnY, btnW, btnH, btnH / 2);
-  ctx.fill();
-  ctx.restore();
-
-  ctx.fillStyle = '#ffffff';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('SUBSCRIBE', btnX + btnW / 2, cy + 1);
-
-  // bell, ringing (rotation wiggle), to the right of the pill
-  const ring = Math.sin(frameIndex * 0.6) * 0.18;
-  drawBellOutline(btnX + btnW + sideGap + iconR, cy, iconR, ring, '#1a1a1a');
-
-  // hand cursor pressing up into the pill from its lower-left, on a
-  // repeating press/release cycle with a small ripple on each tap
-  const cyclePos = (frameIndex % 45) / 45;   // 1.5s cycle at 30fps
-  const press = cyclePos < 0.15 ? cyclePos / 0.15 : (cyclePos < 0.3 ? 1 - (cyclePos - 0.15) / 0.15 : 0);
-  const cursorCx = btnX + btnW * 0.28;
-  const cursorCy = btnY + btnH * 0.85 + (1 - press) * btnH * 0.22;
-
-  if (press > 0.05) {{
-    ctx.save();
-    ctx.globalAlpha = (1 - press) * 0.45;
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = btnH * 0.05;
-    ctx.beginPath();
-    ctx.arc(cursorCx, cursorCy, btnH * (0.3 + press * 0.4), 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
-  }}
-
-  ctx.save();
-  ctx.translate(cursorCx, cursorCy);
-  ctx.fillStyle = '#f2c9a0';
-  ctx.strokeStyle = '#00000055';
-  ctx.lineWidth = btnH * 0.03;
-  const fw = btnH * 0.5, fh = btnH * 0.65;
-  ctx.beginPath();
-  ctx.moveTo(-fw * 0.5, fh * 0.15);
-  ctx.quadraticCurveTo(-fw * 0.55, -fh * 0.1, -fw * 0.15, -fh * 0.5);
-  ctx.quadraticCurveTo(0, -fh * 0.6, fw * 0.1, -fh * 0.35);
-  ctx.quadraticCurveTo(fw * 0.5, -fh * 0.3, fw * 0.45, fh * 0.05);
-  ctx.quadraticCurveTo(fw * 0.4, fh * 0.55, 0, fh * 0.62);
-  ctx.quadraticCurveTo(-fw * 0.35, fh * 0.55, -fw * 0.5, fh * 0.15);
+  ctx.moveTo(btnX + btnW - btnH * 0.32, btnY + btnH * 0.14);
+  ctx.lineTo(btnX + btnW - btnH * 0.06, btnY + btnH * 0.14);
+  ctx.lineTo(btnX + btnW - btnH * 0.06, btnY + btnH * 0.58);
   ctx.closePath();
   ctx.fill();
-  ctx.stroke();
   ctx.restore();
+
+  drawSparkles(btnX + btnW * 0.15, cy, btnH * 0.6, btnH * 0.95, 3, 3.6, frameIndex);
+
+  // bell, in its own light circular button
+  const bellCx = btnX + btnW + gap + bellR;
+  ctx.save();
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(bellCx, cy, bellR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.translate(bellCx, cy);
+  drawBellFilled(bellR * 0.55, '#9aa0aa');
+  ctx.restore();
+
+  drawSparkles(bellCx, cy, bellR * 1.05, bellR * 1.45, 4, 0.7, frameIndex);
 }}
 
 function drawClock(frameIndex, cx, cy) {{
