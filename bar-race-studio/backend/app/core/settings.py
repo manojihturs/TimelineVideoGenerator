@@ -9,13 +9,18 @@ UPLOADS_DIR = STORAGE_DIR / "uploads"
 RENDERS_DIR = STORAGE_DIR / "renders"
 ASSETS_DIR = STORAGE_DIR / "assets"  # watermarks/logos, background music
 
-# Drop zone for the auto-pipeline: format_service writes formatted CSVs into
-# UNPROCESSED_DIR; folder_watcher picks them up, renders desktop+mobile
-# videos, and moves the source file to PROCESSED_DIR (or FAILED_DIR if
-# formatting/detection/render couldn't complete) so it's never re-picked-up.
+# Drop zone for the auto-pipeline: the /format page's "Format & Auto
+# Generate" button writes formatted CSVs into UNPROCESSED_DIR; folder_watcher
+# picks them up, renders desktop+mobile videos, and moves the source file to
+# PROCESSED_DIR (or FAILED_DIR if formatting/detection/render couldn't
+# complete) so it's never re-picked-up. "Format" (format-only, no render)
+# writes to FORMAT_ONLY_DIR instead — the watcher never looks there, so
+# those files just sit ready for the user to review/move manually or drop
+# into Unprocessed later via the "Auto-Generate" button.
 UNPROCESSED_DIR = UPLOADS_DIR / "Unprocessed"
 PROCESSED_DIR = UPLOADS_DIR / "Processed"
 FAILED_DIR = UPLOADS_DIR / "Failed"
+FORMAT_ONLY_DIR = UPLOADS_DIR / "Format"
 
 # Same end-video-append feature as this project's other app.py, reusing
 # the same two files rather than requiring a second copy — bar-race-studio
@@ -58,5 +63,5 @@ PREVIEW_ROW_COUNT = 10
 # app already uses.
 FOLDER_WATCH_INTERVAL_S = 5
 
-for d in (UPLOADS_DIR, RENDERS_DIR, ASSETS_DIR, UNPROCESSED_DIR, PROCESSED_DIR, FAILED_DIR):
+for d in (UPLOADS_DIR, RENDERS_DIR, ASSETS_DIR, UNPROCESSED_DIR, PROCESSED_DIR, FAILED_DIR, FORMAT_ONLY_DIR):
     d.mkdir(parents=True, exist_ok=True)

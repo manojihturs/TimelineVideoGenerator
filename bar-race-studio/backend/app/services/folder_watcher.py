@@ -39,7 +39,7 @@ def _build_configs(mapping: ColumnMapping, title: str, source_label: str) -> tup
     fps = 30
     common = dict(
         mapping=mapping, title=title, data_source_label=source_label,
-        fps=fps, bar_count=10, orientation="horizontal", show_images=True,
+        fps=fps, bar_count=15, orientation="horizontal", show_images=True,
         overlay_labels_on_bars=True, image_position="outside_left", show_clock_icon=True,
     )
     desktop = RaceConfig(
@@ -106,7 +106,10 @@ def _move_with_note(src: Path, dest_dir: Path, note: str | None = None) -> None:
 _last_seen_size: dict[str, int] = {}
 
 
-def _scan_once() -> None:
+def scan_now() -> None:
+    """Runs one scan pass immediately — used both by the background poll
+    loop below and by POST /api/format/run-now, so the "Auto-Generate"
+    button doesn't have to wait for the next scheduled tick."""
     seen_this_scan: set[str] = set()
     for entry in sorted(UNPROCESSED_DIR.iterdir()):
         if not entry.is_file() or entry.name.startswith("_incoming") or entry.name.startswith("."):
@@ -136,7 +139,7 @@ def _scan_once() -> None:
 def _watch_loop() -> None:
     while True:
         try:
-            _scan_once()
+            scan_now()
         except Exception:
             pass  # a scan-level failure shouldn't kill the watcher thread
         time.sleep(FOLDER_WATCH_INTERVAL_S)

@@ -1,21 +1,33 @@
-"""POST /api/format — the "Format" button's endpoint. Takes any number of
-raw CSV/XLSX files, reshapes each into the app's template via
-csv_formatter, and writes the result into UNPROCESSED_DIR, where
-folder_watcher picks it up and renders it automatically."""
+"""Backs the /format page's three buttons:
+  - "Format" (mode=format_only): reshape and save to FORMAT_ONLY_DIR only —
+    folder_watcher never looks there, so nothing gets auto-rendered.
+  - "Format & Auto Generate" (mode=auto_generate, the default): reshape and
+    save to UNPROCESSED_DIR, where folder_watcher picks it up and renders
+    it on its own next poll.
+  - "Auto-Generate": doesn't format anything — POST /api/format/run-now
+    just wakes folder_watcher immediately instead of waiting up to
+    FOLDER_WATCH_INTERVAL_S for whatever's already sitting in
+    UNPROCESSED_DIR (dropped there directly, or by a previous "Format"
+    step moved over manually)."""
 import re
+import threading
 from pathlib import Path
+from typing import Literal
 
 import pandas as pd
-from fastapi import APIRouter, UploadFile
+from fastapi import APIRouter, Form, UploadFile
 from pydantic import BaseModel
 
-from app.core.settings import ALLOWED_UPLOAD_EXTENSIONS, UNPROCESSED_DIR
+from app.core.settings import ALLOWED_UPLOAD_EXTENSIONS, FORMAT_ONLY_DIR, UNPROCESSED_DIR
 from app.services.csv_formatter import FormatError, format_dataframe
 from app.services.dataset_service import load_dataframe
+from app.services.folder_watcher import scan_now
 
 router = APIRouter(prefix="/api/format", tags=["format"])
 
 _UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*]')
+
+FormatMode = Literal["format_only", "auto_generate"]
 
 
 class FormatResult(BaseModel):
@@ -30,17 +42,18 @@ def _safe_stem(filename: str) -> str:
     return _UNSAFE_FILENAME_CHARS.sub("_", stem)
 
 
-def _unique_destination(stem: str) -> Path:
-    dest = UNPROCESSED_DIR / f"{stem}.csv"
+def _unique_destination(dest_dir: Path, stem: str) -> Path:
+    dest = dest_dir / f"{stem}.csv"
     counter = 2
     while dest.exists():
-        dest = UNPROCESSED_DIR / f"{stem}_{counter}.csv"
+        dest = dest_dir / f"{stem}_{counter}.csv"
         counter += 1
     return dest
 
 
 @router.post("", response_model=list[FormatResult])
-async def format_files(files: list[UploadFile]) -> list[FormatResult]:
+async def format_files(files: list[UploadFile], mode: FormatMode = Form("auto_generate")) -> list[FormatResult]:
+    dest_dir = FORMAT_ONLY_DIR if mode == "format_only" else UNPROCESSED_DIR
     results = []
     for file in files:
         filename = file.filename or "dataset"
@@ -53,13 +66,13 @@ async def format_files(files: list[UploadFile]) -> list[FormatResult]:
             continue
 
         content = await file.read()
-        tmp_path = UNPROCESSED_DIR / f"_incoming{ext}"
+        tmp_path = dest_dir / f"_incoming{ext}"
         try:
             tmp_path.write_bytes(content)
             df = load_dataframe(tmp_path)
             formatted = format_dataframe(df)
 
-            dest = _unique_destination(_safe_stem(filename))
+            dest = _unique_destination(dest_dir, _safe_stem(filename))
             formatted.to_csv(dest, index=False)
             results.append(FormatResult(filename=filename, success=True, saved_as=dest.name))
         except (FormatError, ValueError, pd.errors.ParserError) as e:
@@ -70,3 +83,12 @@ async def format_files(files: list[UploadFile]) -> list[FormatResult]:
             tmp_path.unlink(missing_ok=True)
 
     return results
+
+
+@router.post("/run-now")
+def run_now() -> dict:
+    """Triggers folder_watcher's scan immediately (in a background thread,
+    so this returns right away rather than blocking on however long the
+    renders take) instead of waiting for its next poll tick."""
+    threading.Thread(target=scan_now, daemon=True).start()
+    return {"status": "started"}

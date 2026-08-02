@@ -121,7 +121,7 @@ class RaceConfig(BaseModel):
     transition_duration_ms: int = 900  # slower/glidier default than a snappy 500ms
     interpolation: Interpolation = Interpolation.EASE_IN_OUT
 
-    bar_count: int = 10
+    bar_count: int = 15
     sort_direction: SortDirection = SortDirection.DESCENDING
     orientation: Orientation = Orientation.HORIZONTAL
     bar_color_mode: ColorMode = ColorMode.CATEGORY

@@ -238,47 +238,126 @@ function drawBrandLogo() {{
   ctx.restore();
 }}
 
-// Drawn only in the reserved bottom strip on portrait exports — a
-// simple pulsing "SUBSCRIBE" pill + wiggling bell, cueing the viewer
-// toward the platform's own overlay in that same area rather than
-// relying on it alone to carry the prompt.
+// Drawn only in the reserved bottom strip on portrait exports —
+// thumbs-up, SUBSCRIBE pill, and bell as three separate elements side by
+// side (matching the classic YouTube subscribe-animation layout the user
+// referenced), with a clicking hand cursor over the pill.
+function drawBellOutline(cx, cy, r, angle, color) {{
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = r * 0.14;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(0, -r * 0.05, r * 0.7, Math.PI, 0, false);
+  ctx.quadraticCurveTo(r * 0.75, r * 0.35, r * 0.95, r * 0.62);
+  ctx.quadraticCurveTo(0, r * 0.85, -r * 0.95, r * 0.62);
+  ctx.quadraticCurveTo(-r * 0.75, r * 0.35, -r * 0.7, -r * 0.05);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(0, -r * 0.78, r * 0.1, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(0, r * 0.78, r * 0.13, -Math.PI * 0.2, Math.PI * 1.1);
+  ctx.stroke();
+  ctx.restore();
+}}
+
+function drawThumbsUp(cx, cy, size, color) {{
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.fillStyle = color;
+  // palm/fist
+  ctx.beginPath();
+  ctx.roundRect(-size * 0.42, -size * 0.05, size * 0.84, size * 0.55, size * 0.14);
+  ctx.fill();
+  // thumb, angled up-left
+  ctx.save();
+  ctx.translate(-size * 0.18, -size * 0.05);
+  ctx.rotate(-0.35);
+  ctx.beginPath();
+  ctx.roundRect(-size * 0.15, -size * 0.55, size * 0.3, size * 0.6, size * 0.14);
+  ctx.fill();
+  ctx.restore();
+  ctx.restore();
+}}
+
 function drawSubscribeBell(frameIndex) {{
   if (!IS_PORTRAIT) return;
   const stripTop = CONTENT_BOTTOM, stripBottom = H;
   const cy = (stripTop + stripBottom) / 2;
-  const pulse = 1 + 0.06 * Math.sin(frameIndex * 0.35);
+  const pulse = 1 + 0.045 * Math.sin(frameIndex * 0.3);
 
-  const btnW = W * 0.34 * pulse, btnH = H * 0.032 * pulse;
-  const btnX = W * 0.5 - btnW / 2 - W * 0.03, btnY = cy - btnH / 2;
+  const btnH = H * 0.038 * pulse;
+  const padX = btnH * 0.7;
+
+  ctx.font = `bold ${{Math.round(btnH * 0.46)}}px Arial, sans-serif`;
+  const textWidth = ctx.measureText('SUBSCRIBE').width;
+  const btnW = textWidth + padX * 2;
+  const btnX = W * 0.5 - btnW / 2, btnY = cy - btnH / 2;
+
+  const sideGap = btnH * 0.65;
+  const iconR = btnH * 0.42;
+
+  // thumbs-up, bobbing gently, to the left of the pill
+  const bob = Math.sin(frameIndex * 0.22) * btnH * 0.06;
+  drawThumbsUp(btnX - sideGap - iconR, cy + bob, iconR * 1.7, '#3ea6ff');
+
+  // pill
   ctx.save();
   ctx.fillStyle = '#e11d2e';
   ctx.beginPath();
   ctx.roundRect(btnX, btnY, btnW, btnH, btnH / 2);
   ctx.fill();
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `bold ${{Math.round(btnH * 0.52)}}px Arial, sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('SUBSCRIBE', btnX + btnW / 2, btnY + btnH / 2 + 1);
   ctx.restore();
 
-  // bell, wiggling side to side just right of the button
-  const bellCx = btnX + btnW + W * 0.06, bellCy = cy;
-  const bellR = Math.min(W, H) * 0.026;
-  const wiggle = Math.sin(frameIndex * 0.5) * 0.22;
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('SUBSCRIBE', btnX + btnW / 2, cy + 1);
+
+  // bell, ringing (rotation wiggle), to the right of the pill
+  const ring = Math.sin(frameIndex * 0.6) * 0.18;
+  drawBellOutline(btnX + btnW + sideGap + iconR, cy, iconR, ring, '#1a1a1a');
+
+  // hand cursor pressing up into the pill from its lower-left, on a
+  // repeating press/release cycle with a small ripple on each tap
+  const cyclePos = (frameIndex % 45) / 45;   // 1.5s cycle at 30fps
+  const press = cyclePos < 0.15 ? cyclePos / 0.15 : (cyclePos < 0.3 ? 1 - (cyclePos - 0.15) / 0.15 : 0);
+  const cursorCx = btnX + btnW * 0.28;
+  const cursorCy = btnY + btnH * 0.85 + (1 - press) * btnH * 0.22;
+
+  if (press > 0.05) {{
+    ctx.save();
+    ctx.globalAlpha = (1 - press) * 0.45;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = btnH * 0.05;
+    ctx.beginPath();
+    ctx.arc(cursorCx, cursorCy, btnH * (0.3 + press * 0.4), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }}
+
   ctx.save();
-  ctx.translate(bellCx, bellCy);
-  ctx.rotate(wiggle);
-  ctx.fillStyle = '#f5c518';
+  ctx.translate(cursorCx, cursorCy);
+  ctx.fillStyle = '#f2c9a0';
+  ctx.strokeStyle = '#00000055';
+  ctx.lineWidth = btnH * 0.03;
+  const fw = btnH * 0.5, fh = btnH * 0.65;
   ctx.beginPath();
-  ctx.arc(0, -bellR * 0.15, bellR, Math.PI * 0.05, Math.PI * 0.95, true);
-  ctx.lineTo(-bellR * 0.85, bellR * 0.55);
-  ctx.quadraticCurveTo(0, bellR * 0.85, bellR * 0.85, bellR * 0.55);
+  ctx.moveTo(-fw * 0.5, fh * 0.15);
+  ctx.quadraticCurveTo(-fw * 0.55, -fh * 0.1, -fw * 0.15, -fh * 0.5);
+  ctx.quadraticCurveTo(0, -fh * 0.6, fw * 0.1, -fh * 0.35);
+  ctx.quadraticCurveTo(fw * 0.5, -fh * 0.3, fw * 0.45, fh * 0.05);
+  ctx.quadraticCurveTo(fw * 0.4, fh * 0.55, 0, fh * 0.62);
+  ctx.quadraticCurveTo(-fw * 0.35, fh * 0.55, -fw * 0.5, fh * 0.15);
   ctx.closePath();
   ctx.fill();
-  ctx.beginPath();
-  ctx.arc(0, bellR * 0.75, bellR * 0.16, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.stroke();
   ctx.restore();
 }}
 
@@ -395,7 +474,7 @@ function draw(frame, frameIndex) {{
 
   drawAxis();
 
-  const barThickness = rowSpan * 0.42;
+  const barThickness = rowSpan * 0.8;
   for (const bar of frame.bars) {{
     const slot = PLOT_ORIGIN_FOR(bar.rank);
     const lengthFrac = bar.value / DATA.maxValue;
