@@ -321,20 +321,21 @@ function drawSubscribeBell(frameIndex) {{
   const padX = btnH * 0.55;
   const gap = btnH * 0.35;
   const bellR = btnH * 0.44;
-  const stripeW = btnH * 0.16;
 
   const CYCLE = 150;  // 5s at 30fps
   const t = frameIndex % CYCLE;
 
-  ctx.font = `bold ${{Math.round(btnH * 0.36)}}px Arial, sans-serif`;
+  ctx.font = `600 ${{Math.round(btnH * 0.36)}}px Arial, sans-serif`;
+  if ('letterSpacing' in ctx) ctx.letterSpacing = `${{btnH * 0.03}}px`;
   const subscribedWidth = ctx.measureText('SUBSCRIBED').width;
   const subscribeWidth = ctx.measureText('SUBSCRIBE').width;
+  if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
 
   const clickButtonAt = 25, subscribedAt = 33;
   const isSubscribed = t >= subscribedAt;
   const label = isSubscribed ? 'SUBSCRIBED' : 'SUBSCRIBE';
   const textWidth = isSubscribed ? subscribedWidth : subscribeWidth;
-  const btnW = (isSubscribed ? stripeW : 0) + textWidth + padX * 2;
+  const btnW = textWidth + padX * 2;
 
   let cy;
   if (IS_PORTRAIT) {{
@@ -345,7 +346,7 @@ function drawSubscribeBell(frameIndex) {{
   // Use the post-click width for layout so the bell doesn't shift once
   // the button widens for "SUBSCRIBED" — only the button's own fill
   // animates width; bell position stays fixed all cycle.
-  const layoutBtnW = stripeW + subscribedWidth + padX * 2;
+  const layoutBtnW = subscribedWidth + padX * 2;
   const btnX = W * 0.5 - (layoutBtnW + gap + bellR * 2) / 2;
   const btnY = cy - btnH / 2;
   const bellCx = btnX + layoutBtnW + gap + bellR;
@@ -359,40 +360,34 @@ function drawSubscribeBell(frameIndex) {{
   ctx.scale(btnBounce, btnBounce);
   ctx.translate(-(btnX + btnW / 2), -cy);
 
-  ctx.fillStyle = isSubscribed ? '#e9ebee' : '#e11d2e';
+  // soft drop shadow under the whole button — the reference reads as a
+  // raised card, not a flat-pasted shape
+  ctx.save();
+  ctx.shadowColor = 'rgba(20,20,30,0.28)';
+  ctx.shadowBlur = btnH * 0.35;
+  ctx.shadowOffsetY = btnH * 0.14;
+  ctx.fillStyle = isSubscribed ? '#eceef1' : '#e11d2e';
   ctx.beginPath();
-  ctx.roundRect(btnX, btnY, btnW, btnH, btnH * 0.16);
+  ctx.roundRect(btnX, btnY, btnW, btnH, btnH * 0.18);
   ctx.fill();
+  ctx.restore();
 
-  if (isSubscribed) {{
-    ctx.save();
-    ctx.beginPath();
-    ctx.roundRect(btnX, btnY, stripeW * 2.2, btnH, [btnH * 0.16, 0, 0, btnH * 0.16]);
-    ctx.clip();
-    ctx.fillStyle = '#e11d2e';
-    ctx.fillRect(btnX, btnY, stripeW, btnH);
-    ctx.restore();
-  }}
-
+  // Red is only the pre-click "SUBSCRIBE" state's own fill — once
+  // subscribed, the button is plain grey/white with no red accents at
+  // all (no stripe, no corner flag), per correction.
   ctx.fillStyle = isSubscribed ? '#5b6270' : '#ffffff';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillText(label, btnX + (isSubscribed ? stripeW : 0) + padX, cy + 1);
-
-  if (isSubscribed) {{
-    ctx.save();
-    ctx.fillStyle = '#e11d2e';
-    ctx.beginPath();
-    ctx.moveTo(btnX + btnW - btnH * 0.32, btnY + btnH * 0.14);
-    ctx.lineTo(btnX + btnW - btnH * 0.06, btnY + btnH * 0.14);
-    ctx.lineTo(btnX + btnW - btnH * 0.06, btnY + btnH * 0.58);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
-  }}
+  if ('letterSpacing' in ctx) ctx.letterSpacing = `${{btnH * 0.03}}px`;
+  ctx.font = `600 ${{Math.round(btnH * 0.36)}}px Arial, sans-serif`;
+  ctx.fillText(label, btnX + padX, cy + 1);
+  if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
   ctx.restore();
 
-  if (isSubscribed) drawSparkles(btnX + btnW * 0.15, cy, btnH * 0.6, btnH * 0.95, 3, 3.6, frameIndex);
+  if (isSubscribed) {{
+    drawSparkles(btnX + btnW * 0.1, cy, btnH * 0.55, btnH * 0.85, 3, 3.6, frameIndex);
+    drawSparkles(btnX + btnW * 0.1, cy, btnH * 0.95, btnH * 1.2, 3, 3.9, frameIndex * 1.3);
+  }}
 
   // bell, in its own light circular button — rings (rotation wiggle) and
   // bounces right after its click window
@@ -401,20 +396,30 @@ function drawSubscribeBell(frameIndex) {{
   const bellBounce = t < clickBellAt ? 1 : (bellClickT < 1 ? 0.85 + 0.15 * easeOutBack(bellClickT) : 1);
   const ringing = t >= clickBellAt && t < clickBellAt + 25;
   const ring = ringing ? Math.sin((t - clickBellAt) * 1.4) * 0.28 * (1 - (t - clickBellAt) / 25) : 0;
+  const bellClicked = t >= clickBellAt;  // notifications turned on — bell stays blue for the rest of the cycle
 
   ctx.save();
   ctx.translate(bellCx, cy);
   ctx.scale(bellBounce, bellBounce);
+  ctx.save();
+  ctx.shadowColor = 'rgba(20,20,30,0.28)';
+  ctx.shadowBlur = bellR * 0.4;
+  ctx.shadowOffsetY = bellR * 0.16;
   ctx.fillStyle = '#ffffff';
   ctx.beginPath();
   ctx.arc(0, 0, bellR, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
   ctx.rotate(ring);
-  drawBellFilled(bellR * 0.55, '#9aa0aa');
+  drawBellFilled(bellR * 0.55, bellClicked ? '#3b82f6' : '#9aa0aa');
   ctx.restore();
 
-  if (ringing) drawSparkles(bellCx, cy, bellR * 1.05, bellR * 1.55, 5, 0.7, frameIndex * 2);
-  else drawSparkles(bellCx, cy, bellR * 1.05, bellR * 1.45, 4, 0.7, frameIndex);
+  if (ringing) {{
+    drawSparkles(bellCx, cy, bellR * 1.05, bellR * 1.45, 5, 0.7, frameIndex * 2);
+    drawSparkles(bellCx, cy, bellR * 1.6, bellR * 1.95, 4, 1.1, frameIndex * 1.6);
+  }} else {{
+    drawSparkles(bellCx, cy, bellR * 1.05, bellR * 1.4, 4, 0.7, frameIndex);
+  }}
 
   // cursor: its tip lands ON the button/bell (not floating below them,
   // which read as "nothing happening" — the click needs to visually
