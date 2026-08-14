@@ -3,7 +3,7 @@ frontend's PropertyPanel maps to exactly one field here — render code
 should never hardcode a value that belongs in this model."""
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SortDirection(str, Enum):
@@ -116,12 +116,12 @@ class RaceConfig(BaseModel):
 
     render_engine: RenderEngine = RenderEngine.CANVAS
 
-    fps: int = 30
+    fps: int = Field(default=30, ge=1)
     animation_speed: float = 1.0
     transition_duration_ms: int = 900  # slower/glidier default than a snappy 500ms
     interpolation: Interpolation = Interpolation.EASE_IN_OUT
 
-    bar_count: int = 15
+    bar_count: int = Field(default=15, ge=1)
     sort_direction: SortDirection = SortDirection.DESCENDING
     orientation: Orientation = Orientation.HORIZONTAL
     bar_color_mode: ColorMode = ColorMode.CATEGORY

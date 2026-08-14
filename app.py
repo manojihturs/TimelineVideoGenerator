@@ -54,6 +54,7 @@ import uuid
 import numpy as np
 import requests
 from flask import Flask, jsonify, request, send_from_directory, abort
+from werkzeug.utils import secure_filename
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 
 Image.MAX_IMAGE_PIXELS = None  # filmstrip is our own generated content, not untrusted input
@@ -82,16 +83,14 @@ _load_dotenv_local()
 
 
 def resolve_ffmpeg():
-    """Find the ffmpeg binary. shutil.which() covers the normal case, but
-    on Windows a long-running process (e.g. this server, started before
-    ffmpeg was installed) keeps the PATH it was launched with — a fresh
-    shell would see an updated PATH, but this process won't until it's
-    restarted. Fall back to searching the winget install location directly
-    so newly-installed ffmpeg works without requiring a full machine/process
-    restart."""
-    found = shutil.which("ffmpeg")
-    if found:
-        return found
+    """Prefer the winget-installed full ffmpeg build over whatever
+    shutil.which() finds first. Some machines have an older/partial ffmpeg
+    binary earlier on PATH (e.g. bundled by an unrelated Python package)
+    that's missing filters this project depends on (like xfade, added in
+    FFmpeg 4.3) — silently picking that one up causes every "append end
+    video" render to fail. The winget full_build is the known-good, fully
+    featured install, so check it first and only fall back to PATH lookup
+    if it isn't present."""
     local_appdata = os.environ.get("LOCALAPPDATA", "")
     if local_appdata:
         pattern = os.path.join(
@@ -101,6 +100,9 @@ def resolve_ffmpeg():
         matches = glob.glob(pattern)
         if matches:
             return matches[0]
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
     return "ffmpeg"  # not found anywhere — let subprocess raise a clear error
 
 
@@ -183,6 +185,8 @@ VIDEO_CATEGORIES = ["FLOP", "AVERAGE", "HIT", "SUPER HIT", "BLOCKBUSTER"]
 MIN_MOVIES_PER_SHORT = 10  # categories below this get combined with others, largest-first
 
 MUSIC_DIR = os.path.join(BASE_DIR, "Music")
+IMAGE_TO_VIDEO_UPLOAD_DIR = os.path.join(BASE_DIR, "_uploads", "image_to_video")
+IMAGE_TO_VIDEO_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 DESKTOP_END_VIDEO = os.path.join(BASE_DIR, "Desktop End video.mp4")
 MOBILE_END_VIDEO = os.path.join(BASE_DIR, "Mobile End video.mp4")
 XFADE_SECONDS = 1.0  # how long the end video takes to slide across and settle in
@@ -1849,6 +1853,42 @@ def add_looped_music(silent_video_path, total_seconds, out_path):
     return os.path.basename(track)
 
 
+def build_image_video(image_path, duration_s, out_path):
+    """Mobile-shorts only: static image held for duration_s at RESOLUTION_MOBILE
+    (any source orientation is scaled/padded to fill that vertical frame,
+    never cropped), Mobile End video.mp4 slid in at the end (same
+    append_end_video_silent xfade this project's other mobile renders use —
+    a no-op if that file doesn't exist), then a random Music/ track mixed
+    in over the whole combined duration via add_looped_music."""
+    width, height = RESOLUTION_MOBILE
+    scale_pad = (
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+    )
+    tmp_dir = out_path + "_tmp"
+    os.makedirs(tmp_dir, exist_ok=True)
+    try:
+        silent_path = os.path.join(tmp_dir, "silent.mp4")
+        cmd = [
+            FFMPEG_BIN, "-y", "-loop", "1", "-i", image_path,
+            "-t", str(duration_s), "-vf", scale_pad,
+            "-c:v", "libx264", "-tune", "stillimage",
+            *FASTSTART_ARGS,
+            "-an", silent_path,
+        ]
+        subprocess.run(cmd, check=True, capture_output=True)
+
+        combined_silent_path = os.path.join(tmp_dir, "combined_silent.mp4")
+        append_end_video_silent(silent_path, MOBILE_END_VIDEO, combined_silent_path, width, height)
+        total_seconds = ffprobe_duration(combined_silent_path)
+
+        tmp_out_path = os.path.join(tmp_dir, os.path.basename(out_path))
+        add_looped_music(combined_silent_path, total_seconds, tmp_out_path)
+        os.replace(tmp_out_path, out_path)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def append_end_video_silent(main_silent_path, end_video_path, out_path, width, height):
     """Slide end_video_path's VIDEO ONLY in from the right over the last
     XFADE_SECONDS of main_silent_path (ffmpeg's xfade "slideleft"
@@ -2301,6 +2341,47 @@ def run_pull_movie_data_job(job_id, auto_retry=0):
             return
         job["status"] = "error"
         job["message"] = str(e)
+
+
+def run_image_to_video_job(job_id, image_paths, dest_dir, duration_s):
+    """Render one video per image (see build_image_video), writing each
+    directly into dest_dir. Failures on individual images are recorded in
+    results and don't stop the rest of the batch."""
+    job = JOBS[job_id]
+    total = len(image_paths)
+    os.makedirs(dest_dir, exist_ok=True)
+    results = []
+    try:
+        for i, image_path in enumerate(image_paths):
+            name = os.path.basename(image_path)
+            job["message"] = f"Rendering {i + 1}/{total}: {name}"
+            job["progress"] = int(i / total * 100)
+
+            stem = os.path.splitext(name)[0]
+            out_path = os.path.join(dest_dir, f"{stem}.mp4")
+            counter = 2
+            while os.path.exists(out_path):
+                out_path = os.path.join(dest_dir, f"{stem}_{counter}.mp4")
+                counter += 1
+
+            try:
+                build_image_video(image_path, duration_s, out_path)
+                results.append({"file": name, "output": out_path, "ok": True})
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr.decode(errors="replace")[-500:] if e.stderr else str(e)
+                results.append({"file": name, "error": stderr, "ok": False})
+
+        ok_count = sum(1 for r in results if r["ok"])
+        job["status"] = "done"
+        job["progress"] = 100
+        job["message"] = f"Rendered {ok_count}/{total} video(s)"
+        job["results"] = results
+    except Exception as e:
+        job["status"] = "error"
+        job["message"] = str(e)
+        job["results"] = results
+    finally:
+        shutil.rmtree(os.path.dirname(image_paths[0]), ignore_errors=True) if image_paths else None
 
 
 # --------------------------------------------------------------------------
@@ -2767,6 +2848,50 @@ def api_job_status(job_id):
     if not job:
         abort(404)
     return jsonify({k: v for k, v in job.items() if k != "stop_event"})
+
+
+@app.route("/api/image-to-video/render", methods=["POST"])
+def api_image_to_video_render():
+    files = request.files.getlist("images")
+    if not files:
+        return jsonify({"error": "Select at least one image."}), 400
+
+    dest_dir = (request.form.get("dest_dir") or "").strip()
+    if not dest_dir:
+        return jsonify({"error": "Destination folder is required."}), 400
+
+    try:
+        duration_s = int(request.form.get("duration", 30))
+    except (TypeError, ValueError):
+        return jsonify({"error": "duration must be a number."}), 400
+    if duration_s not in (30, 60):
+        return jsonify({"error": "duration must be 30 or 60."}), 400
+
+    job_id = uuid.uuid4().hex[:12]
+    upload_dir = os.path.join(IMAGE_TO_VIDEO_UPLOAD_DIR, job_id)
+    os.makedirs(upload_dir, exist_ok=True)
+
+    image_paths = []
+    for f in files:
+        name = secure_filename(f.filename or "")
+        if not name or os.path.splitext(name)[1].lower() not in IMAGE_TO_VIDEO_EXTENSIONS:
+            continue
+        save_path = os.path.join(upload_dir, name)
+        f.save(save_path)
+        image_paths.append(save_path)
+
+    if not image_paths:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        return jsonify({"error": "No valid image files (jpg/png/webp/bmp) were uploaded."}), 400
+
+    JOBS[job_id] = {"status": "running", "progress": 0, "message": "Starting", "output_path": None}
+    t = threading.Thread(
+        target=run_image_to_video_job,
+        args=(job_id, image_paths, dest_dir, duration_s),
+        daemon=True,
+    )
+    t.start()
+    return jsonify({"job_id": job_id}), 202
 
 
 @app.route("/api/projects/<title>/export/<path:filename>", methods=["GET"])

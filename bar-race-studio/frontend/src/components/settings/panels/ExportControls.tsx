@@ -6,17 +6,25 @@ export function ExportControls() {
   const { status, error, startRender, downloadUrl } = useRenderJob()
 
   const isRendering = status && status.status !== 'done' && status.status !== 'failed'
+  const missingRequired = !config.title.trim() || !config.data_source_label.trim()
 
   return (
     <div className="mt-2">
       <button
         type="button"
-        disabled={Boolean(isRendering)}
+        disabled={Boolean(isRendering) || missingRequired}
         onClick={() => startRender(config)}
+        title={missingRequired ? 'Add a title and data source above before exporting.' : undefined}
         className="w-full rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {isRendering ? 'Rendering…' : 'Export'}
       </button>
+
+      {!isRendering && missingRequired && (
+        <p className="mt-2 text-xs text-amber-400">
+          Add a title and data source above (see Chart text) before exporting.
+        </p>
+      )}
 
       {status && (
         <div className="mt-3">

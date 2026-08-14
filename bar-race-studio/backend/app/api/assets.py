@@ -2,6 +2,7 @@
 watermark/logo images and background music tracks. Stored the same way
 as dataset uploads (storage.py's pattern), served back by asset_id so
 they can be referenced from a RaceConfig without re-uploading."""
+import re
 import uuid
 from pathlib import Path
 
@@ -15,6 +16,8 @@ router = APIRouter(prefix="/api/assets", tags=["assets"])
 ALLOWED_IMAGE_EXT = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
 ALLOWED_AUDIO_EXT = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
 
+_VALID_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
 
 def _save_asset(file_bytes: bytes, filename: str, allowed_ext: set[str]) -> str:
     ext = Path(filename).suffix.lower()
@@ -26,6 +29,8 @@ def _save_asset(file_bytes: bytes, filename: str, allowed_ext: set[str]) -> str:
 
 
 def resolve_asset_path(asset_id: str) -> Path | None:
+    if not _VALID_ID_RE.match(asset_id):
+        return None
     matches = list(ASSETS_DIR.glob(f"{asset_id}.*"))
     return matches[0] if matches else None
 

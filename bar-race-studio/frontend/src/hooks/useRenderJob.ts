@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createRender, getRenderStatus, renderDownloadUrl } from '../api/renders'
 import type { RaceConfig } from '../models/RaceConfig'
 import type { RenderJobStatus } from '../models/Frames'
@@ -45,6 +45,12 @@ export function useRenderJob() {
     },
     [stopPolling],
   )
+
+  useEffect(() => {
+    return () => {
+      stopPolling()
+    }
+  }, [])
 
   return {
     jobId,

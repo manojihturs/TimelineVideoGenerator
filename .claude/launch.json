@@ -6,6 +6,18 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["app.py"],
       "port": 5050
+    },
+    {
+      "name": "bar-race-backend",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--app-dir", "bar-race-studio/backend", "--port", "8000"],
+      "port": 8000
+    },
+    {
+      "name": "bar-race-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "bar-race-studio/frontend", "run", "dev"],
+      "port": 5173
     }
   ]
 }

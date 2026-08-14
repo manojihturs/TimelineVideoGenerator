@@ -24,6 +24,7 @@
 <nav class="top-tabs" id="top-tabs">
   <button class="top-tab active" data-tab="timeline" type="button">Timeline</button>
   <button class="top-tab" data-tab="barrace" type="button">Bar Race Chart</button>
+  <button class="top-tab" data-tab="imagevideo" type="button">Image to Video</button>
 </nav>
 
 <div id="tab-timeline" class="tab-panel">
@@ -351,7 +352,60 @@
   <iframe id="barrace-frame" class="barrace-frame" data-src="http://localhost:5173" title="Bar Race Chart Studio"></iframe>
 </div>
 
+<div id="tab-imagevideo" class="tab-panel hidden">
+<main class="tab-content">
+  <div class="panel">
+    <h2 class="panel-title">Image to Video</h2>
+    <p class="lede-sm">Upload one or more images and render each into its own mobile-shorts video
+      (1080×1920) — the image held static for the chosen duration, "Mobile End video.mp4" slid in
+      at the end, and a random track from music/ mixed in over the whole thing. Videos are written
+      directly to the destination folder on this machine.</p>
+
+    <div class="field-row" style="margin-top:8px">
+      <div class="field" style="flex:1">
+        <label class="field-label">Images</label>
+        <input id="iv-images" class="field-input" type="file"
+               accept="image/jpeg,image/png,image/webp,image/bmp" multiple />
+      </div>
+    </div>
+
+    <div class="field-row">
+      <div class="field" style="flex:1">
+        <label class="field-label">Destination folder <span class="req">*</span>
+          <span class="hint">(path on this machine)</span></label>
+        <input id="iv-dest" class="field-input" type="text" placeholder="D:\Videos\Output" />
+      </div>
+    </div>
+
+    <div class="field-row">
+      <div class="field">
+        <label class="field-label">Duration</label>
+        <label><input type="radio" name="iv-duration" value="30" checked /> 30 seconds</label>
+        <label style="margin-left:16px"><input type="radio" name="iv-duration" value="60" /> 60 seconds</label>
+      </div>
+    </div>
+
+    <div class="field-row" style="margin-top:8px">
+      <button id="iv-generate" class="btn btn-primary">Generate</button>
+    </div>
+    <p id="iv-error" class="error-text hidden"></p>
+
+    <div id="iv-progress-wrap" class="panel render-panel hidden" style="margin-top:14px">
+      <div class="progress-track"><div id="iv-progress-fill" class="progress-fill"></div></div>
+      <div class="render-stats">
+        <span id="iv-progress-percent" class="render-percent">0%</span>
+        <span id="iv-timer" class="render-timer">Elapsed 0:00</span>
+      </div>
+      <p id="iv-message" class="render-message">Starting…</p>
+    </div>
+
+    <ul id="iv-results" class="exports-list" style="margin-top:14px"></ul>
+  </div>
+</main>
+</div>
+
 <script src="/static/js/app.js"></script>
 <script src="/static/js/tabs.js"></script>
+<script src="/static/js/imagevideo.js"></script>
 </body>
 </html>

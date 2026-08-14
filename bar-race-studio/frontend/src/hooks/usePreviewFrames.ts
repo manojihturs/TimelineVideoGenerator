@@ -14,6 +14,7 @@ export function usePreviewFrames(config: RaceConfig) {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const requestIdRef = useRef(0)
 
   const dataKey = JSON.stringify({
     dataset_id: config.dataset_id,
@@ -21,6 +22,7 @@ export function usePreviewFrames(config: RaceConfig) {
     bar_count: config.bar_count,
     sort_direction: config.sort_direction,
     smooth_animation: config.smooth_animation,
+    interpolation: config.interpolation,
   })
 
   useEffect(() => {
@@ -28,10 +30,20 @@ export function usePreviewFrames(config: RaceConfig) {
     debounceRef.current = setTimeout(() => {
       setIsLoading(true)
       setError(null)
+      const requestId = ++requestIdRef.current
       fetchPreviewFrames(config)
-        .then((res) => setFrames(res.frames))
-        .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load preview'))
-        .finally(() => setIsLoading(false))
+        .then((res) => {
+          if (requestIdRef.current !== requestId) return
+          setFrames(res.frames)
+        })
+        .catch((e) => {
+          if (requestIdRef.current !== requestId) return
+          setError(e instanceof Error ? e.message : 'Failed to load preview')
+        })
+        .finally(() => {
+          if (requestIdRef.current !== requestId) return
+          setIsLoading(false)
+        })
     }, DEBOUNCE_MS)
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)

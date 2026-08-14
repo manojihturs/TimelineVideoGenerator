@@ -1,10 +1,24 @@
 import type { ReactNode } from 'react'
 
-export function Field({ label, children }: { label: string; children: ReactNode }) {
+export function Field({
+  label,
+  required,
+  hint,
+  children,
+}: {
+  label: string
+  required?: boolean
+  hint?: string
+  children: ReactNode
+}) {
   return (
     <label className="mb-3 block text-xs">
-      <span className="mb-1 block font-medium text-gray-400">{label}</span>
+      <span className="mb-1 block font-medium text-gray-400">
+        {label}
+        {required && <span className="ml-0.5 text-red-400">*</span>}
+      </span>
       {children}
+      {hint && <span className="mt-1 block text-[11px] text-gray-500">{hint}</span>}
     </label>
   )
 }
@@ -16,8 +30,24 @@ export function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={inputClass} />
 }
 
-export function NumberInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
-  return <input type="number" {...props} className={inputClass} />
+export function NumberInput({ min, max, onChange, ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!onChange) return
+    const raw = e.target.value
+    // Let the user clear the field or type a leading '-' without forcing a
+    // clamp mid-edit -- only clamp once the value parses to a real number.
+    if (raw === '' || raw === '-') return
+    const parsed = Number(raw)
+    if (Number.isNaN(parsed)) return
+    let clamped = parsed
+    if (min !== undefined && min !== '' && clamped < Number(min)) clamped = Number(min)
+    if (max !== undefined && max !== '' && clamped > Number(max)) clamped = Number(max)
+    if (clamped !== parsed) {
+      e.target.value = String(clamped)
+    }
+    onChange(e)
+  }
+  return <input type="number" min={min} max={max} {...props} onChange={handleChange} className={inputClass} />
 }
 
 export function ColorInput(props: React.InputHTMLAttributes<HTMLInputElement>) {

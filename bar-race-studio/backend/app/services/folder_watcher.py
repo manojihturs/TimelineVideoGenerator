@@ -138,6 +138,16 @@ def _move_with_note(src: Path, dest_dir: Path, note: str | None = None) -> Path:
 
 _last_seen_size: dict[str, int] = {}
 
+# Guards the claim step below (the stability check + shutil.move into
+# InProgress) so the watch loop's own tick and a manually-triggered
+# scan_now() (POST /api/format/run-now, which runs it in its own thread)
+# can't both decide to claim the same file at once. Deliberately scoped to
+# just that step, not the whole scan_now() call -- _process_file() below
+# waits synchronously on renders that can take 10-20+ minutes, and holding
+# this lock across that wait would make a manual "Auto-Generate" trigger
+# block for that long before it could even claim its own files.
+_claim_lock = threading.Lock()
+
 
 def _reclaim_interrupted_files() -> None:
     """Runs once at startup. Anything sitting in InProgress means the
@@ -161,23 +171,37 @@ def scan_now() -> None:
             continue
         key = str(entry)
         seen_this_scan.add(key)
-        size = entry.stat().st_size
-        # A file dropped in directly (not via /api/format, which writes
-        # atomically) may still be mid-copy — only process once its size
-        # has held steady across two consecutive polls.
-        if _last_seen_size.get(key) != size:
-            _last_seen_size[key] = size
-            continue
-        _last_seen_size.pop(key, None)
 
-        # Claimed into InProgress before any rendering starts — see
-        # module docstring for why this specific ordering matters.
-        claimed = _move_with_note(entry, INPROGRESS_DIR)
+        claimed: Path | None = None
         try:
+            # Stability check + claim-move are one atomic step under
+            # _claim_lock: without it, two concurrent scan_now() calls
+            # could both see a stable, unclaimed file and both attempt
+            # the shutil.move, with the loser's move raising. That's now
+            # also caught below (claimed stays None), so even a residual
+            # race here can't abort the rest of this scan's files.
+            with _claim_lock:
+                size = entry.stat().st_size
+                # A file dropped in directly (not via /api/format, which
+                # writes atomically) may still be mid-copy — only process
+                # once its size has held steady across two consecutive polls.
+                if _last_seen_size.get(key) != size:
+                    _last_seen_size[key] = size
+                    continue
+                _last_seen_size.pop(key, None)
+
+                # Claimed into InProgress before any rendering starts — see
+                # module docstring for why this specific ordering matters.
+                claimed = _move_with_note(entry, INPROGRESS_DIR)
+
             _process_file(claimed)
             _move_with_note(claimed, PROCESSED_DIR)
         except Exception as e:
-            _move_with_note(claimed, FAILED_DIR, note=str(e))
+            if claimed is not None:
+                _move_with_note(claimed, FAILED_DIR, note=str(e))
+            # else: the claim step itself failed (e.g. lost a race, or the
+            # file vanished) — nothing was claimed, so there's nothing to
+            # move; just move on to the next file in this scan.
 
     for key in list(_last_seen_size):
         if key not in seen_this_scan:

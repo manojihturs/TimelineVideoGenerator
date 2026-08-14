@@ -9,6 +9,7 @@
     FOLDER_WATCH_INTERVAL_S for whatever's already sitting in
     UNPROCESSED_DIR (dropped there directly, or by a previous "Format"
     step moved over manually)."""
+import logging
 import re
 import threading
 from pathlib import Path
@@ -22,6 +23,8 @@ from app.core.settings import ALLOWED_UPLOAD_EXTENSIONS, FORMAT_ONLY_DIR, UNPROC
 from app.services.csv_formatter import FormatError, format_dataframe
 from app.services.dataset_service import load_dataframe
 from app.services.folder_watcher import scan_now
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/format", tags=["format"])
 
@@ -85,10 +88,22 @@ async def format_files(files: list[UploadFile], mode: FormatMode = Form("auto_ge
     return results
 
 
+def _scan_now_in_background() -> None:
+    """Thread target for the background scan below. scan_now() already
+    handles its own per-file failures internally, but this call is
+    fire-and-forget (there's no caller left to report to once run_now()
+    has returned), so any unexpected top-level error is at least logged
+    here instead of only printing a traceback to stderr and vanishing."""
+    try:
+        scan_now()
+    except Exception:
+        logger.exception("Background scan_now() triggered by /api/format/run-now failed")
+
+
 @router.post("/run-now")
 def run_now() -> dict:
     """Triggers folder_watcher's scan immediately (in a background thread,
     so this returns right away rather than blocking on however long the
     renders take) instead of waiting for its next poll tick."""
-    threading.Thread(target=scan_now, daemon=True).start()
+    threading.Thread(target=_scan_now_in_background, daemon=True).start()
     return {"status": "started"}

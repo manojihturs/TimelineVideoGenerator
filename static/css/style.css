@@ -127,7 +127,7 @@ h1, h2 {
 
 /* ---------- layout ---------- */
 
-main#app {
+main#app, .tab-content {
   max-width: 980px;
   margin: 0 auto;
   padding: 40px 24px 80px;

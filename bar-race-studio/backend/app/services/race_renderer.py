@@ -2,8 +2,9 @@
 every visual RaceConfig setting — orientation, color mode, labels, fonts,
 grid/axis, images, background. This is the only module that touches
 matplotlib; everything upstream is just data."""
+import hashlib
 import os
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
 
 import matplotlib
 matplotlib.use("Agg")  # headless — no display server needed for server-side rendering
@@ -50,6 +51,12 @@ DEFAULT_PALETTE = [
 # more than it saves — the sequential path wins for short renders/previews.
 MIN_FRAMES_FOR_PARALLEL = 40
 
+# Ceiling on how long a single worker's whole chunk of frames may take —
+# without this, a worker that hangs (e.g. a stuck matplotlib/font-cache
+# call) leaves the whole render job stuck at "rendering" forever, since
+# ProcessPoolExecutor.map() blocks indefinitely with no timeout of its own.
+WORKER_CHUNK_TIMEOUT_S = 600
+
 
 def _contrast_text_color(background_hex: str) -> tuple[str, str, str]:
     """Returns (primary_text, secondary_text, grid) colors readable
@@ -94,8 +101,24 @@ def _resolve_colors(ranked_df: pd.DataFrame, config: RaceConfig) -> dict[str, st
     group_col = "category" if ranked_df["category"].dropna().nunique() > 1 else "entity"
     keys = sorted(ranked_df[group_col].dropna().unique())
     color_by_group = {k: palette[i % len(palette)] for i, k in enumerate(keys)}
+
+    def _color_for(row) -> str:
+        group_value = getattr(row, group_col)
+        if group_value in color_by_group:
+            return color_by_group[group_value]
+        # This row's own group_col value is missing (e.g. a null category
+        # while other rows do have one, so group_col == "category" here)
+        # -- keys/color_by_group above never included a null, so falling
+        # back to palette[0] would silently collide with whichever real
+        # key sorted first alphabetically and also landed on palette[0].
+        # Hash the entity name into its own stable palette slot instead,
+        # so uncategorized entities get a distinct (and still consistent
+        # across frames/re-renders) color of their own.
+        fallback_index = int(hashlib.md5(str(row.entity).encode("utf-8")).hexdigest(), 16) % len(palette)
+        return palette[fallback_index]
+
     return {
-        row.entity: color_by_group.get(getattr(row, group_col), palette[0])
+        row.entity: _color_for(row)
         for row in ranked_df.drop_duplicates("entity").itertuples(index=False)
     }
 
@@ -286,7 +309,15 @@ def _render_frame_to_file(
     # through fractional slots across the whole transition instead of
     # snapping to a new integer position the instant the interpolated
     # value crosses a neighbor's
-    positions = config.bar_count - frame["rank"].to_numpy()  # rank 1 at top/right
+    if config.orientation == Orientation.HORIZONTAL:
+        positions = config.bar_count - frame["rank"].to_numpy()  # rank 1 at top (largest y, axis not inverted)
+    else:
+        # rank 1 at left (smallest x, axis not inverted) -- matches
+        # canvas_renderer.py's PLOT_ORIGIN_FOR, which places idx = rank - 1
+        # at the leftmost slot for vertical layouts. The two engines must
+        # agree on which side rank 1 lands, or a render switched between
+        # engines would visibly mirror its bar order.
+        positions = frame["rank"].to_numpy() - 1
     # room past the longest bar for the value label + entity image,
     # so neither gets clipped at the right/top edge of the frame
     value_area = max_value * 0.35 if (config.show_value or config.show_images) else max_value * 0.1
@@ -599,8 +630,20 @@ def render_frames_parallel(
 
     all_paths = []
     with ProcessPoolExecutor(max_workers=len(tasks)) as executor:
-        for result in executor.map(_render_chunk_worker, tasks):
-            all_paths.extend(result)
+        futures = [executor.submit(_render_chunk_worker, task) for task in tasks]
+        try:
+            # as_completed's timeout bounds the whole wait, not each
+            # individual future, but that's exactly what we want here: if
+            # the slowest worker hasn't finished within the budget, treat
+            # the whole render as hung and raise rather than blocking
+            # forever (ProcessPoolExecutor.map(), used previously, had no
+            # such escape hatch).
+            for future in as_completed(futures, timeout=WORKER_CHUNK_TIMEOUT_S):
+                all_paths.extend(future.result())
+        except FutureTimeoutError:
+            for future in futures:
+                future.cancel()
+            raise
 
     all_paths.sort()
     return all_paths

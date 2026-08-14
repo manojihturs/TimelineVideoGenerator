@@ -14,6 +14,13 @@ from pathlib import Path
 
 from app.models.config import ExportFormat, Resolution
 
+# Applied to every ffmpeg/ffprobe subprocess.run() call below so a hung
+# subprocess (bad codec negotiation, a stuck pipe, etc.) raises
+# subprocess.TimeoutExpired instead of leaving the render job stuck at
+# "rendering"/"encoding" forever — job_manager._run_render_job's except
+# Exception clause already catches this and marks the job failed.
+FFMPEG_TIMEOUT_S = 600
+
 RESOLUTION_PIXELS: dict[Resolution, tuple[int, int]] = {
     Resolution.HD_1080P: (1920, 1080),
     Resolution.QHD_1440P: (2560, 1440),
@@ -23,16 +30,14 @@ RESOLUTION_PIXELS: dict[Resolution, tuple[int, int]] = {
 
 
 def resolve_ffmpeg() -> str:
-    """Find the ffmpeg binary. shutil.which() covers the normal case, but
-    on Windows a long-running process (e.g. this server, started before
-    ffmpeg was installed) keeps the PATH it was launched with — a fresh
-    shell would see an updated PATH, but this process won't until it's
-    restarted. Fall back to searching the winget install location directly
-    so newly-installed ffmpeg works without requiring a full machine/process
-    restart."""
-    found = shutil.which("ffmpeg")
-    if found:
-        return found
+    """Prefer the winget-installed full ffmpeg build over whatever
+    shutil.which() finds first. Some machines have an older/partial ffmpeg
+    binary earlier on PATH (e.g. bundled by an unrelated Python package)
+    that's missing filters this project depends on (like xfade, added in
+    FFmpeg 4.3) — silently picking that one up causes every "append end
+    video" render to fail. The winget full_build is the known-good, fully
+    featured install, so check it first and only fall back to PATH lookup
+    if it isn't present."""
     local_appdata = os.environ.get("LOCALAPPDATA", "")
     if local_appdata:
         pattern = os.path.join(
@@ -42,6 +47,9 @@ def resolve_ffmpeg() -> str:
         matches = glob.glob(pattern)
         if matches:
             return matches[0]
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
     return "ffmpeg"  # not found anywhere — let subprocess raise a clear error
 
 
@@ -69,14 +77,22 @@ def encode_frames(
         # palette-based two-pass encode for a much better-quality GIF
         # than a naive single-pass conversion
         palette_path = os.path.join(frame_dir, "palette.png")
-        subprocess.run([
-            ffmpeg, "-y", "-framerate", str(fps), "-i", pattern,
-            "-vf", "palettegen", palette_path,
-        ], check=True, capture_output=True)
-        subprocess.run([
-            ffmpeg, "-y", "-framerate", str(fps), "-i", pattern, "-i", palette_path,
-            "-lavfi", "paletteuse", out_path,
-        ], check=True, capture_output=True)
+        try:
+            subprocess.run([
+                ffmpeg, "-y", "-framerate", str(fps), "-i", pattern,
+                "-vf", "palettegen", palette_path,
+            ], check=True, capture_output=True, timeout=FFMPEG_TIMEOUT_S)
+            subprocess.run([
+                ffmpeg, "-y", "-framerate", str(fps), "-i", pattern, "-i", palette_path,
+                "-lavfi", "paletteuse", out_path,
+            ], check=True, capture_output=True, timeout=FFMPEG_TIMEOUT_S)
+        finally:
+            # frame_dir currently sits inside a per-job temp dir the caller
+            # (job_manager) cleans up wholesale, but clean up explicitly
+            # here too rather than relying on that — defense in depth, and
+            # consistent with encode_captured_video's palette cleanup below.
+            if os.path.exists(palette_path):
+                os.remove(palette_path)
         return out_path
 
     # MP4
@@ -87,7 +103,7 @@ def encode_frames(
         "-movflags", "+faststart",
         out_path,
     ]
-    subprocess.run(cmd, check=True, capture_output=True)
+    subprocess.run(cmd, check=True, capture_output=True, timeout=FFMPEG_TIMEOUT_S)
     return out_path
 
 
@@ -102,7 +118,7 @@ def probe_duration_seconds(path: str) -> float:
     result = subprocess.run([
         ffprobe, "-v", "error", "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1", path,
-    ], check=True, capture_output=True, text=True)
+    ], check=True, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT_S)
     return float(result.stdout.strip())
 
 
@@ -151,19 +167,29 @@ def encode_captured_video(
         speed_filter = [f"setpts={multiplier}*PTS"]
 
     if export_format == ExportFormat.GIF:
+        # out_path's dirname is the persistent storage/renders/ directory
+        # (not a per-job temp dir), so this palette file must be removed
+        # explicitly once the paletteuse pass is done — otherwise it leaks
+        # permanently, one extra file per canvas-engine GIF export, forever.
+        # The try/finally ensures it's still cleaned up if encoding raises
+        # (including on a subprocess.TimeoutExpired from the timeout below).
         palette_path = os.path.join(os.path.dirname(out_path), "_palette.png")
-        vf = ",".join(speed_filter + ["palettegen"]) if speed_filter else "palettegen"
-        subprocess.run([
-            ffmpeg, "-y", "-ss", str(trim_s), "-i", webm_path, "-vf", vf, palette_path,
-        ], check=True, capture_output=True)
-        vf2 = ",".join(speed_filter) if speed_filter else None
-        cmd = [ffmpeg, "-y", "-ss", str(trim_s), "-i", webm_path, "-i", palette_path]
-        if vf2:
-            cmd += ["-filter_complex", f"[0:v]{vf2}[v];[v][1:v]paletteuse"]
-        else:
-            cmd += ["-lavfi", "paletteuse"]
-        cmd.append(out_path)
-        subprocess.run(cmd, check=True, capture_output=True)
+        try:
+            vf = ",".join(speed_filter + ["palettegen"]) if speed_filter else "palettegen"
+            subprocess.run([
+                ffmpeg, "-y", "-ss", str(trim_s), "-i", webm_path, "-vf", vf, palette_path,
+            ], check=True, capture_output=True, timeout=FFMPEG_TIMEOUT_S)
+            vf2 = ",".join(speed_filter) if speed_filter else None
+            cmd = [ffmpeg, "-y", "-ss", str(trim_s), "-i", webm_path, "-i", palette_path]
+            if vf2:
+                cmd += ["-filter_complex", f"[0:v]{vf2}[v];[v][1:v]paletteuse"]
+            else:
+                cmd += ["-lavfi", "paletteuse"]
+            cmd.append(out_path)
+            subprocess.run(cmd, check=True, capture_output=True, timeout=FFMPEG_TIMEOUT_S)
+        finally:
+            if os.path.exists(palette_path):
+                os.remove(palette_path)
         return out_path
 
     pix_fmt = "yuva420p" if transparent_background else "yuv420p"
@@ -177,7 +203,7 @@ def encode_captured_video(
         "-movflags", "+faststart",
         out_path,
     ]
-    subprocess.run(cmd, check=True, capture_output=True)
+    subprocess.run(cmd, check=True, capture_output=True, timeout=FFMPEG_TIMEOUT_S)
     return out_path
 
 
@@ -215,7 +241,7 @@ def append_end_video(main_path: str, end_video_path: Path | str, out_path: str, 
         "-c:v", "libx264", "-preset", "veryfast",
         "-pix_fmt", "yuv420p", "-movflags", "+faststart",
         out_path,
-    ], check=True, capture_output=True)
+    ], check=True, capture_output=True, timeout=FFMPEG_TIMEOUT_S)
     return out_path
 
 
@@ -244,7 +270,7 @@ def prepend_intro_image(main_path: str, image_path: Path | str, out_path: str, w
         "-c:v", "libx264", "-preset", "veryfast",
         "-pix_fmt", "yuv420p", "-movflags", "+faststart",
         out_path,
-    ], check=True, capture_output=True)
+    ], check=True, capture_output=True, timeout=FFMPEG_TIMEOUT_S)
     return out_path
 
 
@@ -278,5 +304,5 @@ def mix_background_music(video_path: str, music_path: str, volume: float, out_pa
         "-shortest",
         "-movflags", "+faststart",
         out_path,
-    ], check=True, capture_output=True)
+    ], check=True, capture_output=True, timeout=FFMPEG_TIMEOUT_S)
     return out_path
