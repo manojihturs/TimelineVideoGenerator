@@ -1853,33 +1853,63 @@ def add_looped_music(silent_video_path, total_seconds, out_path):
     return os.path.basename(track)
 
 
-def build_image_video(image_path, duration_s, out_path):
-    """Mobile-shorts only: static image held for duration_s at RESOLUTION_MOBILE
-    (any source orientation is scaled/padded to fill that vertical frame,
-    never cropped), Mobile End video.mp4 slid in at the end (same
-    append_end_video_silent xfade this project's other mobile renders use —
-    a no-op if that file doesn't exist), then a random Music/ track mixed
-    in over the whole combined duration via add_looped_music."""
-    width, height = RESOLUTION_MOBILE
+WELCOME_END_IMAGE_SECONDS = 2  # how long a welcome/end still image holds, if one is given
+IMAGE_TO_VIDEO_VIDEO_EXTENSIONS = (".mp4", ".mov", ".avi", ".webm", ".mkv")
+
+
+def _render_static_image_silent(image_path, duration_s, width, height, out_path):
+    """One static image held for duration_s at width x height, no audio —
+    the building block build_image_video composes welcome/content/end
+    segments from before sliding them together and mixing in music."""
     scale_pad = (
         f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
         f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1"
     )
+    cmd = [
+        FFMPEG_BIN, "-y", "-loop", "1", "-i", image_path,
+        "-t", str(duration_s), "-r", str(FPS), "-vf", scale_pad,
+        "-c:v", "libx264", "-tune", "stillimage",
+        *FASTSTART_ARGS,
+        "-an", out_path,
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
+def build_image_video(image_path, duration_s, out_path, welcome_image_path=None, end_asset_path=None):
+    """Mobile-shorts only: an optional welcome image (WELCOME_END_IMAGE_SECONDS),
+    the main image held for duration_s, then an optional end asset — all at
+    RESOLUTION_MOBILE, any source orientation scaled/padded to fill that
+    vertical frame rather than cropped. Each segment slides into the next
+    via the same append_end_video_silent xfade this project's other mobile
+    renders use. end_asset_path may be a video (used as-is) or a still
+    image (held for WELCOME_END_IMAGE_SECONDS first); with no end_asset_path
+    it falls back to Mobile End video.mp4, same as before. A random Music/
+    track is mixed in last, over the whole combined duration."""
+    width, height = RESOLUTION_MOBILE
     tmp_dir = out_path + "_tmp"
     os.makedirs(tmp_dir, exist_ok=True)
     try:
-        silent_path = os.path.join(tmp_dir, "silent.mp4")
-        cmd = [
-            FFMPEG_BIN, "-y", "-loop", "1", "-i", image_path,
-            "-t", str(duration_s), "-vf", scale_pad,
-            "-c:v", "libx264", "-tune", "stillimage",
-            *FASTSTART_ARGS,
-            "-an", silent_path,
-        ]
-        subprocess.run(cmd, check=True, capture_output=True)
+        content_silent = os.path.join(tmp_dir, "content.mp4")
+        _render_static_image_silent(image_path, duration_s, width, height, content_silent)
+
+        with_welcome_silent = content_silent
+        if welcome_image_path:
+            welcome_silent = os.path.join(tmp_dir, "welcome.mp4")
+            _render_static_image_silent(welcome_image_path, WELCOME_END_IMAGE_SECONDS, width, height, welcome_silent)
+            with_welcome_silent = os.path.join(tmp_dir, "with_welcome.mp4")
+            append_end_video_silent(welcome_silent, content_silent, with_welcome_silent, width, height)
+
+        end_video_path = MOBILE_END_VIDEO
+        if end_asset_path:
+            if os.path.splitext(end_asset_path)[1].lower() in IMAGE_TO_VIDEO_VIDEO_EXTENSIONS:
+                end_video_path = end_asset_path
+            else:
+                end_silent = os.path.join(tmp_dir, "end.mp4")
+                _render_static_image_silent(end_asset_path, WELCOME_END_IMAGE_SECONDS, width, height, end_silent)
+                end_video_path = end_silent
 
         combined_silent_path = os.path.join(tmp_dir, "combined_silent.mp4")
-        append_end_video_silent(silent_path, MOBILE_END_VIDEO, combined_silent_path, width, height)
+        append_end_video_silent(with_welcome_silent, end_video_path, combined_silent_path, width, height)
         total_seconds = ffprobe_duration(combined_silent_path)
 
         tmp_out_path = os.path.join(tmp_dir, os.path.basename(out_path))
@@ -2343,7 +2373,7 @@ def run_pull_movie_data_job(job_id, auto_retry=0):
         job["message"] = str(e)
 
 
-def run_image_to_video_job(job_id, image_paths, dest_dir, duration_s):
+def run_image_to_video_job(job_id, image_paths, dest_dir, duration_s, welcome_image_path=None, end_asset_path=None):
     """Render one video per image (see build_image_video), writing each
     directly into dest_dir. Failures on individual images are recorded in
     results and don't stop the rest of the batch."""
@@ -2365,7 +2395,8 @@ def run_image_to_video_job(job_id, image_paths, dest_dir, duration_s):
                 counter += 1
 
             try:
-                build_image_video(image_path, duration_s, out_path)
+                build_image_video(image_path, duration_s, out_path,
+                                   welcome_image_path=welcome_image_path, end_asset_path=end_asset_path)
                 results.append({"file": name, "output": out_path, "ok": True})
             except subprocess.CalledProcessError as e:
                 stderr = e.stderr.decode(errors="replace")[-500:] if e.stderr else str(e)
@@ -2884,10 +2915,28 @@ def api_image_to_video_render():
         shutil.rmtree(upload_dir, ignore_errors=True)
         return jsonify({"error": "No valid image files (jpg/png/webp/bmp) were uploaded."}), 400
 
+    welcome_image_path = None
+    welcome_file = request.files.get("welcome_image")
+    if welcome_file and welcome_file.filename:
+        name = secure_filename(welcome_file.filename)
+        ext = os.path.splitext(name)[1].lower()
+        if ext in IMAGE_TO_VIDEO_EXTENSIONS:
+            welcome_image_path = os.path.join(upload_dir, f"_welcome{ext}")
+            welcome_file.save(welcome_image_path)
+
+    end_asset_path = None
+    end_file = request.files.get("end_asset")
+    if end_file and end_file.filename:
+        name = secure_filename(end_file.filename)
+        ext = os.path.splitext(name)[1].lower()
+        if ext in IMAGE_TO_VIDEO_EXTENSIONS or ext in IMAGE_TO_VIDEO_VIDEO_EXTENSIONS:
+            end_asset_path = os.path.join(upload_dir, f"_end{ext}")
+            end_file.save(end_asset_path)
+
     JOBS[job_id] = {"status": "running", "progress": 0, "message": "Starting", "output_path": None}
     t = threading.Thread(
         target=run_image_to_video_job,
-        args=(job_id, image_paths, dest_dir, duration_s),
+        args=(job_id, image_paths, dest_dir, duration_s, welcome_image_path, end_asset_path),
         daemon=True,
     )
     t.start()

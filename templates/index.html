@@ -357,15 +357,33 @@
   <div class="panel">
     <h2 class="panel-title">Image to Video</h2>
     <p class="lede-sm">Upload one or more images and render each into its own mobile-shorts video
-      (1080×1920) — the image held static for the chosen duration, "Mobile End video.mp4" slid in
-      at the end, and a random track from music/ mixed in over the whole thing. Videos are written
-      directly to the destination folder on this machine.</p>
+      (1080×1920): an optional welcome image (2s) → the image held static for the chosen duration
+      → an optional end image/video (falls back to "Mobile End video.mp4" if not set), each sliding
+      into the next, with a random track from music/ mixed in over the whole thing. Each output is
+      named after its content image. Videos are written directly to the destination folder on this
+      machine.</p>
 
     <div class="field-row" style="margin-top:8px">
       <div class="field" style="flex:1">
-        <label class="field-label">Images</label>
+        <label class="field-label">Images <span class="hint">(the main content — one video per image)</span></label>
         <input id="iv-images" class="field-input" type="file"
                accept="image/jpeg,image/png,image/webp,image/bmp" multiple />
+      </div>
+    </div>
+
+    <div class="field-row">
+      <div class="field" style="flex:1">
+        <label class="field-label">Welcome image <span class="hint">(optional, shown for 2s before the content)</span></label>
+        <input id="iv-welcome" class="field-input" type="file"
+               accept="image/jpeg,image/png,image/webp,image/bmp" />
+      </div>
+    </div>
+
+    <div class="field-row">
+      <div class="field" style="flex:1">
+        <label class="field-label">End image or video <span class="hint">(optional, defaults to Mobile End video.mp4)</span></label>
+        <input id="iv-end" class="field-input" type="file"
+               accept="image/jpeg,image/png,image/webp,image/bmp,video/mp4,video/quicktime,video/webm,video/x-msvideo,video/x-matroska" />
       </div>
     </div>
 

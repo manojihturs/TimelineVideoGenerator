@@ -4,6 +4,8 @@
 // Timeline tool's own state.
 (function () {
   const imagesInput = document.getElementById("iv-images");
+  const welcomeInput = document.getElementById("iv-welcome");
+  const endInput = document.getElementById("iv-end");
   const destInput = document.getElementById("iv-dest");
   const generateBtn = document.getElementById("iv-generate");
   const errorEl = document.getElementById("iv-error");
@@ -104,6 +106,8 @@
 
     const formData = new FormData();
     for (const file of files) formData.append("images", file);
+    if (welcomeInput.files[0]) formData.append("welcome_image", welcomeInput.files[0]);
+    if (endInput.files[0]) formData.append("end_asset", endInput.files[0]);
     formData.append("dest_dir", destDir);
     formData.append("duration", duration);
 
