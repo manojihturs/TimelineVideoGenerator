@@ -1880,35 +1880,33 @@ WELCOME_END_IMAGE_SECONDS = 2  # how long a welcome/end still image holds, if on
 IMAGE_TO_VIDEO_VIDEO_EXTENSIONS = (".mp4", ".mov", ".avi", ".webm", ".mkv")
 
 
-def _render_static_image_silent(image_path, duration_s, width, height, out_path):
-    """One static image held for duration_s at width x height, no audio —
-    the building block build_image_video composes welcome/content/end
-    segments from before sliding them together and mixing in music."""
-    scale_pad = (
-        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1"
-    )
-    cmd = [
-        FFMPEG_BIN, "-y", "-loop", "1", "-i", image_path,
-        "-t", str(duration_s), "-r", str(FPS), "-vf", scale_pad,
-        "-c:v", "libx264", "-tune", "stillimage", "-threads", str(IMAGE_TO_VIDEO_FFMPEG_THREADS),
-        *FASTSTART_ARGS,
-        "-an", out_path,
-    ]
-    subprocess.run(cmd, check=True, capture_output=True)
-
-
 def build_image_video(image_path, duration_s, out_path, welcome_image_path=None, end_asset_path=None):
     """Mobile-shorts only: an optional welcome image (WELCOME_END_IMAGE_SECONDS),
     the main image held for duration_s, then an optional end asset — all at
     RESOLUTION_MOBILE, any source orientation scaled/padded to fill that
-    vertical frame rather than cropped. Each segment slides into the next
-    via the same append_end_video_silent xfade this project's other mobile
-    renders use. end_asset_path may be a video (used as-is) or a still
-    image (held for WELCOME_END_IMAGE_SECONDS first); with no end_asset_path
-    it falls back to Mobile End video.mp4, same as before. A random Music/
-    track is mixed in last, over the whole combined duration."""
+    vertical frame rather than cropped, each segment sliding into the next.
+    end_asset_path may be a video (used as-is, at its own length) or a still
+    image (held for WELCOME_END_IMAGE_SECONDS); with no end_asset_path it
+    falls back to Mobile End video.mp4 (skipped entirely if that file
+    doesn't exist either). A random Music/ track is mixed in last, over the
+    whole combined duration.
+
+    All segments are composited in ONE ffmpeg pass (one filter_complex
+    chaining every xfade transition) rather than pre-rendering each segment
+    to its own file and re-encoding the growing result at each transition --
+    that earlier approach re-encoded the content segment twice (once
+    merging with welcome, again merging with end), which was the dominant
+    cost in a batch render. This isn't the same "stream-copy + concat
+    demuxer" shortcut append_end_video_silent's docstring warns broke
+    Windows' Movies & TV app -- it's a single continuously-encoded stream
+    (like that function's own re-encode-through-xfade approach), just
+    chaining N-1 transitions in one call instead of doing them one file at
+    a time."""
     width, height = RESOLUTION_MOBILE
+    scale_pad_fps = (
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={FPS}"
+    )
     # A short, fixed-length tmp dir name -- not out_path + "_tmp" -- because
     # that embeds the full descriptive output filename into the directory
     # name, then places a file with that SAME long filename inside it,
@@ -1920,29 +1918,52 @@ def build_image_video(image_path, duration_s, out_path, welcome_image_path=None,
     tmp_dir = os.path.join(os.path.dirname(out_path), f"_tmp_{uuid.uuid4().hex[:8]}")
     os.makedirs(tmp_dir, exist_ok=True)
     try:
-        content_silent = os.path.join(tmp_dir, "content.mp4")
-        _render_static_image_silent(image_path, duration_s, width, height, content_silent)
-
-        with_welcome_silent = content_silent
+        # (is_video, path, duration_or_None) -- duration is None for a real
+        # video segment, which uses its own natural length.
+        segments = []
         if welcome_image_path:
-            welcome_silent = os.path.join(tmp_dir, "welcome.mp4")
-            _render_static_image_silent(welcome_image_path, WELCOME_END_IMAGE_SECONDS, width, height, welcome_silent)
-            with_welcome_silent = os.path.join(tmp_dir, "with_welcome.mp4")
-            append_end_video_silent(welcome_silent, content_silent, with_welcome_silent, width, height,
-                                     threads=IMAGE_TO_VIDEO_FFMPEG_THREADS)
-
-        end_video_path = MOBILE_END_VIDEO
-        if end_asset_path:
-            if os.path.splitext(end_asset_path)[1].lower() in IMAGE_TO_VIDEO_VIDEO_EXTENSIONS:
-                end_video_path = end_asset_path
+            segments.append((False, welcome_image_path, WELCOME_END_IMAGE_SECONDS))
+        segments.append((False, image_path, duration_s))
+        end_path = end_asset_path or (MOBILE_END_VIDEO if os.path.isfile(MOBILE_END_VIDEO) else None)
+        if end_path:
+            if os.path.splitext(end_path)[1].lower() in IMAGE_TO_VIDEO_VIDEO_EXTENSIONS:
+                segments.append((True, end_path, None))
             else:
-                end_silent = os.path.join(tmp_dir, "end.mp4")
-                _render_static_image_silent(end_asset_path, WELCOME_END_IMAGE_SECONDS, width, height, end_silent)
-                end_video_path = end_silent
+                segments.append((False, end_path, WELCOME_END_IMAGE_SECONDS))
 
         combined_silent_path = os.path.join(tmp_dir, "combined_silent.mp4")
-        append_end_video_silent(with_welcome_silent, end_video_path, combined_silent_path, width, height,
-                                 threads=IMAGE_TO_VIDEO_FFMPEG_THREADS)
+        cmd = [FFMPEG_BIN, "-y"]
+        for is_video, path, dur in segments:
+            # -t must precede -i to apply as a per-input trim; placed after
+            # -i here it would silently apply to the NEXT input instead (or
+            # act as an output-duration option if there happened to be no
+            # next input) once more than one -i is present on the command.
+            cmd += ["-i", path] if is_video else ["-loop", "1", "-t", str(dur), "-i", path]
+
+        if len(segments) == 1:
+            cmd += ["-vf", scale_pad_fps]
+        else:
+            durations = [dur if dur is not None else ffprobe_duration(path) for _, path, dur in segments]
+            filter_parts = [f"[{i}:v]{scale_pad_fps}[v{i}]" for i in range(len(segments))]
+            running = durations[0]
+            prev_label = "v0"
+            for i in range(1, len(segments)):
+                offset = max(0.0, running - XFADE_SECONDS)
+                out_label = "vout" if i == len(segments) - 1 else f"vx{i}"
+                filter_parts.append(
+                    f"[{prev_label}][v{i}]xfade=transition=slideleft:duration={XFADE_SECONDS}:offset={offset}[{out_label}]"
+                )
+                running = running + durations[i] - XFADE_SECONDS
+                prev_label = out_label
+            cmd += ["-filter_complex", ";".join(filter_parts), "-map", f"[{prev_label}]"]
+
+        cmd += [
+            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "stillimage",
+            "-threads", str(IMAGE_TO_VIDEO_FFMPEG_THREADS),
+            *FASTSTART_ARGS,
+            combined_silent_path,
+        ]
+        subprocess.run(cmd, check=True, capture_output=True)
         total_seconds = ffprobe_duration(combined_silent_path)
 
         tmp_out_path = os.path.join(tmp_dir, os.path.basename(out_path))
@@ -1952,7 +1973,7 @@ def build_image_video(image_path, duration_s, out_path, welcome_image_path=None,
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def append_end_video_silent(main_silent_path, end_video_path, out_path, width, height, threads=None):
+def append_end_video_silent(main_silent_path, end_video_path, out_path, width, height):
     """Slide end_video_path's VIDEO ONLY in from the right over the last
     XFADE_SECONDS of main_silent_path (ffmpeg's xfade "slideleft"
     transition) instead of a hard cut — the end video travels in and
@@ -1990,8 +2011,6 @@ def append_end_video_silent(main_silent_path, end_video_path, out_path, width, h
         *FASTSTART_ARGS,
         out_path,
     ]
-    if threads is not None:
-        cmd[-1:-1] = ["-threads", str(threads)]  # insert just before out_path
     subprocess.run(cmd, check=True, capture_output=True)
 
 
