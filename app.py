@@ -40,6 +40,7 @@ Redis/RQ and the threading.Thread for a real worker.
 """
 
 import csv
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import glob
 import json
 import os
@@ -187,6 +188,13 @@ MIN_MOVIES_PER_SHORT = 10  # categories below this get combined with others, lar
 MUSIC_DIR = os.path.join(BASE_DIR, "Music")
 IMAGE_TO_VIDEO_UPLOAD_DIR = os.path.join(BASE_DIR, "_uploads", "image_to_video")
 IMAGE_TO_VIDEO_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+# Each image's build_image_video pass is several sequential ffmpeg re-encodes
+# (content -> optional welcome merge -> end-video transition -> music mix),
+# so processing one at a time made large batches (dozens of images) look
+# hung for many minutes with zero output. ffmpeg subprocesses release the
+# GIL while running, so a modest thread pool gets real wall-clock overlap
+# without oversubscribing a single machine's CPU.
+IMAGE_TO_VIDEO_MAX_WORKERS = min(4, os.cpu_count() or 4)
 DESKTOP_END_VIDEO = os.path.join(BASE_DIR, "Desktop End video.mp4")
 MOBILE_END_VIDEO = os.path.join(BASE_DIR, "Mobile End video.mp4")
 XFADE_SECONDS = 1.0  # how long the end video takes to slide across and settle in
@@ -1781,7 +1789,15 @@ def render_object_set(objects, width, height, total_seconds, out_path, actor_pho
     strip, so the caller (not this function) owns filtering/truncation."""
     if not objects:
         raise RuntimeError("No movies to render for this set.")
-    tmp_dir = out_path + "_tmp"
+    # A short, fixed-length tmp dir name -- not out_path + "_tmp" -- because
+    # that embeds the full descriptive output filename into the directory
+    # name, then places a file with that SAME long filename inside it,
+    # doubling it into the path and reliably tipping long, human-readable
+    # filenames (e.g. "020-Tata_Nexon_CAMO_Edition_2026_On-Road_Price_in_
+    # India_All_Variants_Price_Petrol_Diesel__CNG.mp4") over Windows' 260-
+    # char MAX_PATH, which fails os.replace() with a bare "path not found"
+    # (WinError 3) that gives no hint it's a length problem.
+    tmp_dir = os.path.join(os.path.dirname(out_path), f"_tmp_{uuid.uuid4().hex[:8]}")
     os.makedirs(tmp_dir, exist_ok=True)
     try:
         gap = max(2, int((width // CARDS_PER_SCREEN) * 0.006))
@@ -1886,7 +1902,15 @@ def build_image_video(image_path, duration_s, out_path, welcome_image_path=None,
     it falls back to Mobile End video.mp4, same as before. A random Music/
     track is mixed in last, over the whole combined duration."""
     width, height = RESOLUTION_MOBILE
-    tmp_dir = out_path + "_tmp"
+    # A short, fixed-length tmp dir name -- not out_path + "_tmp" -- because
+    # that embeds the full descriptive output filename into the directory
+    # name, then places a file with that SAME long filename inside it,
+    # doubling it into the path and reliably tipping long, human-readable
+    # filenames (e.g. "020-Tata_Nexon_CAMO_Edition_2026_On-Road_Price_in_
+    # India_All_Variants_Price_Petrol_Diesel__CNG.mp4") over Windows' 260-
+    # char MAX_PATH, which fails os.replace() with a bare "path not found"
+    # (WinError 3) that gives no hint it's a length problem.
+    tmp_dir = os.path.join(os.path.dirname(out_path), f"_tmp_{uuid.uuid4().hex[:8]}")
     os.makedirs(tmp_dir, exist_ok=True)
     try:
         content_silent = os.path.join(tmp_dir, "content.mp4")
@@ -2013,7 +2037,15 @@ def render_full_video_with_extras(objects, width, height, main_seconds, speed_mu
     out_path."""
     if not objects:
         raise RuntimeError("No movies to render for this set.")
-    tmp_dir = out_path + "_tmp"
+    # A short, fixed-length tmp dir name -- not out_path + "_tmp" -- because
+    # that embeds the full descriptive output filename into the directory
+    # name, then places a file with that SAME long filename inside it,
+    # doubling it into the path and reliably tipping long, human-readable
+    # filenames (e.g. "020-Tata_Nexon_CAMO_Edition_2026_On-Road_Price_in_
+    # India_All_Variants_Price_Petrol_Diesel__CNG.mp4") over Windows' 260-
+    # char MAX_PATH, which fails os.replace() with a bare "path not found"
+    # (WinError 3) that gives no hint it's a length problem.
+    tmp_dir = os.path.join(os.path.dirname(out_path), f"_tmp_{uuid.uuid4().hex[:8]}")
     os.makedirs(tmp_dir, exist_ok=True)
     try:
         gap = max(2, int((width // CARDS_PER_SCREEN) * 0.006))
@@ -2375,32 +2407,50 @@ def run_pull_movie_data_job(job_id, auto_retry=0):
 
 def run_image_to_video_job(job_id, image_paths, dest_dir, duration_s, welcome_image_path=None, end_asset_path=None):
     """Render one video per image (see build_image_video), writing each
-    directly into dest_dir. Failures on individual images are recorded in
-    results and don't stop the rest of the batch."""
+    directly into dest_dir, up to IMAGE_TO_VIDEO_MAX_WORKERS at a time so a
+    large batch doesn't take an hour+ grinding through one image at a time.
+    Failures on individual images are recorded in results and don't stop
+    the rest of the batch."""
     job = JOBS[job_id]
     total = len(image_paths)
     os.makedirs(dest_dir, exist_ok=True)
+
+    # Reserve every output path up front, sequentially, so the
+    # collision-avoidance check can't race between concurrent workers.
+    tasks = []
+    reserved = set()
+    for image_path in image_paths:
+        name = os.path.basename(image_path)
+        stem = os.path.splitext(name)[0]
+        out_path = os.path.join(dest_dir, f"{stem}.mp4")
+        counter = 2
+        while os.path.exists(out_path) or out_path in reserved:
+            out_path = os.path.join(dest_dir, f"{stem}_{counter}.mp4")
+            counter += 1
+        reserved.add(out_path)
+        tasks.append((image_path, name, out_path))
+
     results = []
+    completed = 0
+    job["message"] = f"Rendering {total} video(s), up to {IMAGE_TO_VIDEO_MAX_WORKERS} at a time..."
     try:
-        for i, image_path in enumerate(image_paths):
-            name = os.path.basename(image_path)
-            job["message"] = f"Rendering {i + 1}/{total}: {name}"
-            job["progress"] = int(i / total * 100)
-
-            stem = os.path.splitext(name)[0]
-            out_path = os.path.join(dest_dir, f"{stem}.mp4")
-            counter = 2
-            while os.path.exists(out_path):
-                out_path = os.path.join(dest_dir, f"{stem}_{counter}.mp4")
-                counter += 1
-
-            try:
-                build_image_video(image_path, duration_s, out_path,
-                                   welcome_image_path=welcome_image_path, end_asset_path=end_asset_path)
-                results.append({"file": name, "output": out_path, "ok": True})
-            except subprocess.CalledProcessError as e:
-                stderr = e.stderr.decode(errors="replace")[-500:] if e.stderr else str(e)
-                results.append({"file": name, "error": stderr, "ok": False})
+        with ThreadPoolExecutor(max_workers=IMAGE_TO_VIDEO_MAX_WORKERS) as executor:
+            future_to_task = {
+                executor.submit(build_image_video, image_path, duration_s, out_path,
+                                 welcome_image_path=welcome_image_path, end_asset_path=end_asset_path): (name, out_path)
+                for image_path, name, out_path in tasks
+            }
+            for future in as_completed(future_to_task):
+                name, out_path = future_to_task[future]
+                try:
+                    future.result()
+                    results.append({"file": name, "output": out_path, "ok": True})
+                except subprocess.CalledProcessError as e:
+                    stderr = e.stderr.decode(errors="replace")[-500:] if e.stderr else str(e)
+                    results.append({"file": name, "error": stderr, "ok": False})
+                completed += 1
+                job["progress"] = int(completed / total * 100)
+                job["message"] = f"Rendered {completed}/{total}"
 
         ok_count = sum(1 for r in results if r["ok"])
         job["status"] = "done"
