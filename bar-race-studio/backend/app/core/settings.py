@@ -6,7 +6,7 @@ from pathlib import Path
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 STORAGE_DIR = Path(os.environ.get("BAR_RACE_STORAGE_DIR", BACKEND_DIR / "storage"))
 UPLOADS_DIR = STORAGE_DIR / "uploads"
-RENDERS_DIR = STORAGE_DIR / "renders"
+RENDERS_DIR = Path(os.environ.get("BAR_RACE_RENDERS_DIR", r"C:\TimeLineVideo\BarRaceChart\RenderVideo"))
 ASSETS_DIR = STORAGE_DIR / "assets"  # watermarks/logos, background music
 
 # Drop zone for the auto-pipeline: the /format page's "Format & Auto

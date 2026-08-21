@@ -109,7 +109,7 @@ def resolve_ffmpeg():
 
 FFMPEG_BIN = resolve_ffmpeg()
 
-PROJECTS_DIR = os.path.join(BASE_DIR, "projects")
+PROJECTS_DIR = r"C:\TimeLineVideo\Timeline\Projects"
 os.makedirs(PROJECTS_DIR, exist_ok=True)
 
 CATEGORIES_PATH = os.path.join(BASE_DIR, "categories.json")
@@ -195,6 +195,13 @@ IMAGE_TO_VIDEO_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 # GIL while running, so a modest thread pool gets real wall-clock overlap
 # without oversubscribing a single machine's CPU.
 IMAGE_TO_VIDEO_MAX_WORKERS = min(4, os.cpu_count() or 4)
+# libx264 auto-detects thread count per process (defaults to using every
+# core it can see) -- with IMAGE_TO_VIDEO_MAX_WORKERS ffmpeg encodes running
+# at once, that means every single one of them tries to claim the whole
+# machine, so they fight over the same cores instead of actually running in
+# parallel. Capping each encode to its fair share turns the worker pool back
+# into a real speedup instead of CPU-contention theater.
+IMAGE_TO_VIDEO_FFMPEG_THREADS = max(1, (os.cpu_count() or 4) // IMAGE_TO_VIDEO_MAX_WORKERS)
 DESKTOP_END_VIDEO = os.path.join(BASE_DIR, "Desktop End video.mp4")
 MOBILE_END_VIDEO = os.path.join(BASE_DIR, "Mobile End video.mp4")
 XFADE_SECONDS = 1.0  # how long the end video takes to slide across and settle in
@@ -1884,7 +1891,7 @@ def _render_static_image_silent(image_path, duration_s, width, height, out_path)
     cmd = [
         FFMPEG_BIN, "-y", "-loop", "1", "-i", image_path,
         "-t", str(duration_s), "-r", str(FPS), "-vf", scale_pad,
-        "-c:v", "libx264", "-tune", "stillimage",
+        "-c:v", "libx264", "-tune", "stillimage", "-threads", str(IMAGE_TO_VIDEO_FFMPEG_THREADS),
         *FASTSTART_ARGS,
         "-an", out_path,
     ]
@@ -1921,7 +1928,8 @@ def build_image_video(image_path, duration_s, out_path, welcome_image_path=None,
             welcome_silent = os.path.join(tmp_dir, "welcome.mp4")
             _render_static_image_silent(welcome_image_path, WELCOME_END_IMAGE_SECONDS, width, height, welcome_silent)
             with_welcome_silent = os.path.join(tmp_dir, "with_welcome.mp4")
-            append_end_video_silent(welcome_silent, content_silent, with_welcome_silent, width, height)
+            append_end_video_silent(welcome_silent, content_silent, with_welcome_silent, width, height,
+                                     threads=IMAGE_TO_VIDEO_FFMPEG_THREADS)
 
         end_video_path = MOBILE_END_VIDEO
         if end_asset_path:
@@ -1933,7 +1941,8 @@ def build_image_video(image_path, duration_s, out_path, welcome_image_path=None,
                 end_video_path = end_silent
 
         combined_silent_path = os.path.join(tmp_dir, "combined_silent.mp4")
-        append_end_video_silent(with_welcome_silent, end_video_path, combined_silent_path, width, height)
+        append_end_video_silent(with_welcome_silent, end_video_path, combined_silent_path, width, height,
+                                 threads=IMAGE_TO_VIDEO_FFMPEG_THREADS)
         total_seconds = ffprobe_duration(combined_silent_path)
 
         tmp_out_path = os.path.join(tmp_dir, os.path.basename(out_path))
@@ -1943,7 +1952,7 @@ def build_image_video(image_path, duration_s, out_path, welcome_image_path=None,
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def append_end_video_silent(main_silent_path, end_video_path, out_path, width, height):
+def append_end_video_silent(main_silent_path, end_video_path, out_path, width, height, threads=None):
     """Slide end_video_path's VIDEO ONLY in from the right over the last
     XFADE_SECONDS of main_silent_path (ffmpeg's xfade "slideleft"
     transition) instead of a hard cut — the end video travels in and
@@ -1981,6 +1990,8 @@ def append_end_video_silent(main_silent_path, end_video_path, out_path, width, h
         *FASTSTART_ARGS,
         out_path,
     ]
+    if threads is not None:
+        cmd[-1:-1] = ["-threads", str(threads)]  # insert just before out_path
     subprocess.run(cmd, check=True, capture_output=True)
 
 
